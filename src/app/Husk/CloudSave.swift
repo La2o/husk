@@ -86,7 +86,7 @@ enum CloudSave {
             let archive = try SaveBackup.export(app)
             defer { try? fm.removeItem(at: archive) }
 
-            let filename = prefix(app) + timestamp() + "-" + UUID().uuidString.prefix(8) + ".zip"
+            let filename = prefix(app) + timestamp() + "-" + String(UUID().uuidString.prefix(8)) + ".zip"
             let destination = folder.appendingPathComponent(filename, isDirectory: false)
             let coordinator = NSFileCoordinator(filePresenter: nil)
             var coordinationError: NSError?
