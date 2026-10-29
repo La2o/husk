@@ -116,13 +116,13 @@ jobs:
           set -euo pipefail
           TAG="itrtg-test-$GITHUB_RUN_NUMBER"
           gh release create "$TAG" \
-            "dist/Husk-Unity6-test.ipa#Husk-ITRTG-test.ipa" \
+            "dist/Husk-Unity6-test.ipa" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Husk ITRTG test #$GITHUB_RUN_NUMBER" \
             --notes "Unsigned experimental Husk IPA from $GITHUB_SHA. Import in Feather and sign locally with your own certificate. Includes experimental Unity6 fix and SIGTRAP diagnostics." \
             --prerelease
-          echo "Direct IPA: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Husk-ITRTG-test.ipa"
+          echo "Direct IPA: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Husk-Unity6-test.ipa"
 
       - name: Refresh install-once Feather source
         run: |
@@ -134,7 +134,7 @@ jobs:
           repo=os.environ["GITHUB_REPOSITORY"]
           number=os.environ["GITHUB_RUN_NUMBER"]
           branch=os.environ["GITHUB_REF_NAME"]
-          url=f"https://github.com/{repo}/releases/download/itrtg-test-{number}/Husk-ITRTG-test.ipa"
+          url=f"https://github.com/{repo}/releases/download/itrtg-test-{number}/Husk-Unity6-test.ipa"
           source_url=f"https://raw.githubusercontent.com/{repo}/refs/heads/{branch}/feather-itrtg.json"
           icon=f"https://raw.githubusercontent.com/{repo}/refs/heads/main/src/app/Husk/Assets.xcassets/AppIcon.appiconset/Icon-Default.png"
           today=datetime.now(timezone.utc).date().isoformat()
@@ -147,9 +147,14 @@ jobs:
               "iconURL": icon,
               "tintColor": "5966D6",
               "version": f"3.1.{number}",
+              "buildVersion": f"130.{number}",
               "versionDate": today,
               "downloadURL": url,
-              "size": Path("dist/Husk-Unity6-test.ipa").stat().st_size
+              "size": Path("dist/Husk-Unity6-test.ipa").stat().st_size,
+              "versions": [{"version":f"3.1.{number}", "buildVersion":f"130.{number}",
+                            "date":today, "downloadURL":url,
+                            "size":Path("dist/Husk-Unity6-test.ipa").stat().st_size,
+                            "localizedDescription":"ITRTG Unity 6/SIGTRAP diagnostics"}]
           }
           doc={"name": "Husk ITRTG Test Builds", "identifier": "com.la2o.husk.itrtg.test",
                "sourceURL": source_url, "apps": [app]}
