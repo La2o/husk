@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/unity6-itrtg-crash
+      - debug/itrtg-sigtrap
   workflow_dispatch:
 
 permissions:
