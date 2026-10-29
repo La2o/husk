@@ -111,7 +111,12 @@ static void on_fatal(int sig, siginfo_t *info, void *uctx)
     where(a, sizeof(a), (uintptr_t)uc->uc_mcontext->__ss.__pc);
     where(b, sizeof(b), (uintptr_t)uc->uc_mcontext->__ss.__lr);
     where(c, sizeof(c), (uintptr_t)info->si_addr);
-    tl_log_line("=== FATAL signal %d on thread '%s': fault address %p (%s)", sig, tn, info->si_addr, c);
+    tl_log_line("=== FATAL signal %d on thread '%s': fault address %p (%s), si_code=%d", sig, tn, info->si_addr, c, info->si_code);
+    /* The JIT guard owns SIGTRAP and re-raises unexpected traps. Capture
+     * the *original* PC/LR, before its fallback raise() erases the
+     * underlying Unity/IL2CPP breakpoint from Apple's crash report. */
+    if (sig == SIGTRAP)
+        tl_log_line("trap: original SIGTRAP delivery, si_code=%d, JIT handler will be chained (not suppressed)", info->si_code);
     tl_log_line("    pc %s", a);
     tl_log_line("    lr %s", b);
     uintptr_t fp = uc->uc_mcontext->__ss.__fp;
@@ -145,7 +150,11 @@ static void install_crash_reporter(void)
     sa.sa_sigaction = on_fatal;
     sa.sa_flags = SA_SIGINFO | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
-    static const int sigs[] = { SIGSEGV, SIGBUS, SIGILL };      /* not SIGTRAP: the app's brk guard owns it */
+    /* Install only once native game startup begins, after JIT has been
+     * allocated. Save the existing SIGTRAP handler and chain to it: JIT
+     * remains responsible for its own breakpoints, and unexpected traps
+     * must keep their original fatal behavior. This only adds diagnostics. */
+    static const int sigs[] = { SIGSEGV, SIGBUS, SIGILL, SIGTRAP };
     for (size_t i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++) sigaction(sigs[i], &sa, &g_prev[sigs[i]]);
 }
 
