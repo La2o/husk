@@ -1,0 +1,114 @@
+name: Build Husk Unity6 test IPA
+
+on:
+  push:
+    branches:
+      - fix/unity6-itrtg-crash
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          df -h .
+      - name: Install XcodeGen
+        run: command -v xcodegen || brew install xcodegen
+      - name: Download official Husk 3.1 runtime
+        run: |
+          set -euo pipefail
+          mkdir -p upstream/unpacked
+          curl -fL --retry 3 --retry-delay 5 https://github.com/Leviidev/Husk/releases/download/3.1/Husk.ipa -o upstream/Husk.ipa
+          unzip -tq upstream/Husk.ipa
+          unzip -q upstream/Husk.ipa -d upstream/unpacked
+          APP=upstream/unpacked/Payload/Husk.app
+          for f in Husk Frameworks/libqemu-aarch64-softmmu.dylib Frameworks/libANGLE-shared.dylib Frameworks/libhuskps4.dylib vmlinuz-virt java-runtime/husk-framework.dex; do
+            test -f "$APP/$f" || { echo "Official release is missing $f"; exit 1; }
+          done
+          mkdir -p build/ios-arm64/lib build/ios-arm64/sysroot/lib
+          cp "$APP/Frameworks/libqemu-aarch64-softmmu.dylib" build/ios-arm64/lib/
+          cp "$APP/Frameworks/libANGLE-shared.dylib" build/ios-arm64/sysroot/lib/
+          cp "$APP/Frameworks/libhuskps4.dylib" build/ios-arm64/lib/
+      - name: Build on-device pairing library
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-apple-ios
+          ./scripts/build_rppairing_ios.sh
+          test -f build/ios-arm64/lib/libhusk_rppairing.a
+      - name: Configure test-only executable rebuild
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("src/app/project.yml")
+          s=p.read_text()
+          dep = "      - framework: ../../build/ios-arm64/lib/MoltenVK.xcframework\n        embed: true\n        codeSign: true\n        link: false\n"
+          assert s.count(dep)==1, "MoltenVK dependency unexpectedly changed"
+          s=s.replace(dep,"")
+          a=s.index("    preBuildScripts:\n")
+          b=s.index("    postBuildScripts:\n",a)
+          s=s[:a]+s[b:]
+          p.write_text(s)
+          PY
+          (cd src/app && xcodegen generate --quiet)
+      - name: Compile patched Husk and helper extensions
+        run: |
+          set -euo pipefail
+          mkdir -p build/test
+          if ! xcodebuild -project src/app/Husk.xcodeproj -scheme Husk -sdk iphoneos -configuration Release -derivedDataPath "$RUNNER_TEMP/husk-test-derived" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build > build/test/xcodebuild.log 2>&1; then
+            grep -nE 'error:|fatal error:|BUILD FAILED' build/test/xcodebuild.log | tail -45 || true
+            tail -50 build/test/xcodebuild.log
+            exit 1
+          fi
+          test -f "$RUNNER_TEMP/husk-test-derived/Build/Products/Release-iphoneos/Husk.app/Husk"
+      - name: Assemble and sign test IPA
+        run: |
+          set -euo pipefail
+          APP="$GITHUB_WORKSPACE/upstream/unpacked/Payload/Husk.app"
+          BUILT="$RUNNER_TEMP/husk-test-derived/Build/Products/Release-iphoneos/Husk.app"
+          cp "$BUILT/Husk" "$APP/Husk"
+          for ext in "$BUILT"/PlugIns/*.appex; do
+            [ -d "$ext" ] || continue
+            rm -rf "$APP/PlugIns/$(basename "$ext")"
+            cp -R "$ext" "$APP/PlugIns/"
+          done
+          plutil -replace HuskBuildCommit -string "$(git rev-parse --short HEAD)" "$APP/Info.plist"
+          plutil -replace HuskBuildDate -string "$(date -u '+%Y-%m-%d %H:%M UTC')" "$APP/Info.plist"
+          find "$APP" -name '*.dylib' -not -path '*/Frameworks/*.framework/*' -print0 | while IFS= read -r -d '' dylib; do
+            codesign --force --sign - --timestamp=none "$dylib"
+          done
+          for fw in "$APP"/Frameworks/*.framework; do
+            [ -d "$fw" ] && codesign --force --sign - --timestamp=none "$fw"
+          done
+          for ext in "$APP"/PlugIns/*.appex; do
+            [ -d "$ext" ] && codesign --force --sign - --timestamp=none "$ext"
+          done
+          codesign --force --sign - --timestamp=none --entitlements src/app/Husk/Husk.entitlements "$APP"
+          codesign --verify --strict "$APP"
+          mkdir -p dist
+          (cd upstream/unpacked && zip -qry "$GITHUB_WORKSPACE/dist/Husk-Unity6-test.ipa" Payload)
+          unzip -tq dist/Husk-Unity6-test.ipa
+          ls -lh dist/Husk-Unity6-test.ipa
+      - name: Upload IPA for Feather
+        uses: actions/upload-artifact@v4
+        with:
+          name: Husk-Unity6-test-${{ github.run_number }}
+          path: dist/Husk-Unity6-test.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload compiler log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Husk-build-log-${{ github.run_number }}
+          path: build/test/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 7
