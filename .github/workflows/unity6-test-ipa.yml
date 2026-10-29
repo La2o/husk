@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -83,6 +83,10 @@ jobs:
           done
           plutil -replace HuskBuildCommit -string "$(git rev-parse --short HEAD)" "$APP/Info.plist"
           plutil -replace HuskBuildDate -string "$(date -u '+%Y-%m-%d %H:%M UTC')" "$APP/Info.plist"
+          # Distinguishable versions for Feather's update UI.
+          # Bundle ID stays com.husk.app; existing saves should be backed up.
+          plutil -replace CFBundleShortVersionString -string "3.1.$GITHUB_RUN_NUMBER" "$APP/Info.plist"
+          plutil -replace CFBundleVersion -string "130.$GITHUB_RUN_NUMBER" "$APP/Info.plist"
           find "$APP" -name '*.dylib' -not -path '*/Frameworks/*.framework/*' -print0 | while IFS= read -r -d '' dylib; do
             codesign --force --sign - --timestamp=none "$dylib"
           done
@@ -105,6 +109,58 @@ jobs:
           path: dist/Husk-Unity6-test.ipa
           if-no-files-found: error
           retention-days: 14
+      - name: Publish direct IPA URL on GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="itrtg-test-$GITHUB_RUN_NUMBER"
+          gh release create "$TAG" \
+            "dist/Husk-Unity6-test.ipa#Husk-ITRTG-test.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Husk ITRTG test #$GITHUB_RUN_NUMBER" \
+            --notes "Unsigned experimental Husk IPA from $GITHUB_SHA. Import in Feather and sign locally with your own certificate. Includes experimental Unity6 fix and SIGTRAP diagnostics." \
+            --prerelease
+          echo "Direct IPA: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Husk-ITRTG-test.ipa"
+
+      - name: Refresh install-once Feather source
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          repo=os.environ["GITHUB_REPOSITORY"]
+          number=os.environ["GITHUB_RUN_NUMBER"]
+          branch=os.environ["GITHUB_REF_NAME"]
+          url=f"https://github.com/{repo}/releases/download/itrtg-test-{number}/Husk-ITRTG-test.ipa"
+          source_url=f"https://raw.githubusercontent.com/{repo}/refs/heads/{branch}/feather-itrtg.json"
+          icon=f"https://raw.githubusercontent.com/{repo}/refs/heads/main/src/app/Husk/Assets.xcassets/AppIcon.appiconset/Icon-Default.png"
+          today=datetime.now(timezone.utc).date().isoformat()
+          app={
+              "name": "Husk ITRTG Test",
+              "bundleIdentifier": "com.husk.app",
+              "developerName": "Husk open-source community fork",
+              "subtitle": "Rapid Unity 6 test builds",
+              "localizedDescription": "Experimental Unity 6 and SIGTRAP diagnostic build for Idling to Rule the Gods. Sign with your own certificate in Feather.",
+              "iconURL": icon,
+              "tintColor": "5966D6",
+              "version": f"3.1.{number}",
+              "versionDate": today,
+              "downloadURL": url,
+              "size": Path("dist/Husk-Unity6-test.ipa").stat().st_size
+          }
+          doc={"name": "Husk ITRTG Test Builds", "identifier": "com.la2o.husk.itrtg.test",
+               "sourceURL": source_url, "apps": [app]}
+          Path("feather-itrtg.json").write_text(json.dumps(doc, indent=2)+"\n")
+          print("Feather source:",source_url)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add feather-itrtg.json
+          git commit -m "chore(feed): publish ITRTG test $GITHUB_RUN_NUMBER for Feather"
+          git push origin "HEAD:$GITHUB_REF_NAME"
       - name: Upload compiler log on failure
         if: failure()
         uses: actions/upload-artifact@v4
