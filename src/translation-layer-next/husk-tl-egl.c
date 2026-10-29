@@ -593,6 +593,20 @@ static void w_glCompileShader(unsigned sh)
     if (slen > 0) getsrc(sh, slen, &got, src);
     for (char *q = log; *q; q++) if (*q == '\n') *q = '|';
     tl_log_line("gl: shader %u failed to compile (%d bytes of source): %.380s", sh, slen, log);
+    /* Diagnostic only. Keep the first two failed sources in the crash report so
+     * that ES 3.1->3.0 downgrade failures can be reproduced without a Mac.
+     * Never emit unbounded game shader text into logs. */
+    if (n < 2 && src) {
+        const char *line = src;
+        for (int lineno = 1; *line && lineno <= 60; lineno++) {
+            const char *end = strchr(line, '\n');
+            size_t bytes = end ? (size_t)(end - line) : strlen(line);
+            if (bytes > 200) bytes = 200;
+            tl_log_line("gl: failed shader %u source L%d: %.*s", sh, lineno, (int)bytes, line);
+            if (!end) break;
+            line = end + 1;
+        }
+    }
     const char *dir = getenv("TL_GL_SHADER_DUMP");
     if (dir) {
         char path[600]; snprintf(path, sizeof(path), "%s/shader-%d.txt", dir, n);
