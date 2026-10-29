@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - the top of every page
 
@@ -132,6 +133,7 @@ struct GamePage: View {
     @State private var savesBusy = false
     @State private var savesMessage: String?
     @State private var confirmRestore: URL?
+    @State private var cloudRestoringName: String?
     @State private var confirmQuit = false
     @State private var reporting: CompatSubject?
     /// JIT-less mode converting and signing this game's libraries before it starts
@@ -228,12 +230,20 @@ struct GamePage: View {
                         .disabled(savesBusy || !SaveBackup.hasData(app))
                     Button { pickRestore() } label: { Label("Restore Saves", systemImage: "clock.arrow.circlepath") }
                         .disabled(savesBusy || loadedNow)
+                    Button { chooseCloudFolder() } label: {
+                        Label(CloudSave.hasFolder(app) ? "Change Cloud Folder" : "Choose Cloud Folder", systemImage: "folder.badge.plus")
+                    }
+                        .disabled(savesBusy)
+                    Button { cloudBackUp() } label: { Label("Back Up to iCloud Drive", systemImage: "icloud.and.arrow.up") }
+                        .disabled(savesBusy || loadedNow || !CloudSave.hasFolder(app) || !SaveBackup.hasData(app))
+                    Button { cloudRestore() } label: { Label("Restore Latest Cloud Backup", systemImage: "icloud.and.arrow.down") }
+                        .disabled(savesBusy || loadedNow || !CloudSave.hasFolder(app))
                 } header: {
                     Text("Saves")
                 } footer: {
                     if let savesMessage { Text(savesMessage) }
-                    else if loadedNow { Text("\(app.label) has been started in this run of Husk. Close Husk and open it again to restore saves.") }
-                    else { Text("A backup is a .zip of everything \(app.label) has saved in Husk, to keep in Files or move to another device.") }
+                    else if loadedNow { Text("\(app.label) has been started in this run of Husk. Close Husk and open it again before backing up or restoring cloud saves.") }
+                    else { Text("Cloud backups are manual: choose an iCloud Drive folder once, then save or restore ZIPs here. This does not sign in to Google Play Games or sync with the game's own servers.") }
                 }
             }
 
@@ -374,20 +384,78 @@ struct GamePage: View {
     }
 
     private func pickRestore() {
+        cloudRestoringName = nil
         HuskFilePicker.present(types: [.zip], multiple: false) { urls in
             if let url = urls.first { confirmRestore = url }
         } onFail: { savesMessage = $0 }
     }
 
-    private func restore(_ url: URL) {
+    private func chooseCloudFolder() {
+        HuskFilePicker.present(types: [.folder], multiple: false) { urls in
+            guard let folder = urls.first else { return }
+            do {
+                try CloudSave.chooseFolder(app, url: folder)
+                savesMessage = "Cloud folder selected: \(folder.lastPathComponent). Choose an iCloud Drive folder for off-device backup."
+            } catch { savesMessage = error.localizedDescription }
+        } onFail: { savesMessage = $0 }
+    }
+
+    private func cloudBackUp() {
+        guard !loadedNow else {
+            savesMessage = "Close and reopen Husk before backing up cloud saves so the game's files are not being written."
+            return
+        }
         savesBusy = true; savesMessage = nil
         let app = self.app
         Task.detached {
+            let result = Result { try CloudSave.backUp(app) }
+            await MainActor.run {
+                savesBusy = false
+                switch result {
+                case .success(let name): savesMessage = "Saved \(name) to your chosen Files folder. iCloud Drive uploads it when available."
+                case .failure(let e): savesMessage = e.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func cloudRestore() {
+        guard !loadedNow else {
+            savesMessage = "Close and reopen Husk before restoring saves."
+            return
+        }
+        savesBusy = true; savesMessage = nil
+        let app = self.app
+        Task.detached {
+            let result = Result { try CloudSave.newestBackupForRestore(app) }
+            await MainActor.run {
+                savesBusy = false
+                switch result {
+                case .success(let found):
+                    cloudRestoringName = found.name
+                    savesMessage = "Latest cloud backup: \(found.name). Confirm to replace this game's local saves."
+                    confirmRestore = found.file
+                case .failure(let e): savesMessage = e.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func restore(_ url: URL) {
+        savesBusy = true; savesMessage = nil
+        let app = self.app
+        let cloudName = cloudRestoringName
+        cloudRestoringName = nil
+        Task.detached {
+            defer {
+                if cloudName != nil { try? FileManager.default.removeItem(at: url) }
+            }
             let result = Result { try SaveBackup.restore(app, from: url) }
             await MainActor.run {
                 savesBusy = false
                 switch result {
-                case .success(let n): savesMessage = "Restored \(n) file\(n == 1 ? "" : "s") from \(url.lastPathComponent)."
+                case .success(let n):
+                    savesMessage = "Restored \(n) file\(n == 1 ? "" : "s") from \(cloudName ?? url.lastPathComponent)."
                 case .failure(let e): savesMessage = e.localizedDescription
                 }
             }
