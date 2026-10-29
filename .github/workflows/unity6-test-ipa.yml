@@ -5,6 +5,7 @@ on:
     branches:
       - fix/unity6-itrtg-crash
       - debug/itrtg-sigtrap
+      - feature/itrtg-icloud-saves
   workflow_dispatch:
 
 permissions:
