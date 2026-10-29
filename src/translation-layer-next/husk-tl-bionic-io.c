@@ -12,6 +12,7 @@
 const char *tl_ld_main_apk(void);
 #include "husk-tl-internal.h"
 #include "husk-tl-codewrite.h"
+#include "husk-tl-ld.h"
 #include "husk-tl-xmem.h"
 
 #include <ctype.h>
@@ -1262,13 +1263,26 @@ static void *b_mmap(void *addr, size_t len, int prot, int flags, int fd, long of
      * go through the writable view (code-write emulation), and mprotect there is a yes. TL_PHONE_JIT=1 does this on a Mac too. */
     if (addr && !(prot & PROT_EXEC) && (prot & PROT_WRITE) && (flags & 0x20) && !(flags & 0x10) && len <= (32u << 20)
         && tl_codewrite_enabled() && phone_jit() && tl_xmem_near(addr, 256u << 20)) {
-        uint8_t *rx, *rw;
-        size_t n = (len + TL_XMEM_PAGE - 1) & ~(size_t)(TL_XMEM_PAGE - 1);
-        if (tl_xmem_alloc(n, &rx, &rw)) {
-            memset(rw, 0, n);
-            tl_note_once("a JIT's code memory (mmap hinted near the code) comes from the JIT region");
-            mm_trace("mmap-jit", rx, len, prot, flags);
-            return rx;
+        /* A Unity 6 library can request ordinary *writable data* near its own code.
+         * The hint alone does not make it a JIT allocation: handing back an RX
+         * alias causes writes to fault, and a data pointer may later be jumped to.
+         * See Husk #105 for a reproduced Unity SIGBUS from this heuristic.
+         * Keep explicitly executable mmap requests on the JIT path above. */
+        const char *caller_lib = tl_ld_lib_name(tl_ld_lib_of(__builtin_return_address(0)));
+        const char *slash = caller_lib ? strrchr(caller_lib, '/') : NULL;
+        const char *name = slash ? slash + 1 : caller_lib;
+        bool unity_data = name && (!strcmp(name, "libunity.so") || !strcmp(name, "libil2cpp.so"));
+        if (unity_data) {
+            tl_note_once("Unity non-executable anonymous mmap kept in ordinary writable memory");
+        } else {
+            uint8_t *rx, *rw;
+            size_t n = (len + TL_XMEM_PAGE - 1) & ~(size_t)(TL_XMEM_PAGE - 1);
+            if (tl_xmem_alloc(n, &rx, &rw)) {
+                memset(rw, 0, n);
+                tl_note_once("a JIT's code memory (mmap hinted near the code) comes from the JIT region");
+                mm_trace("mmap-jit", rx, len, prot, flags);
+                return rx;
+            }
         }
     }
     int df = flags & 0x3;                                   /* MAP_SHARED / MAP_PRIVATE */
