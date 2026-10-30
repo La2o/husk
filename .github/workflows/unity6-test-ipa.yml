@@ -4,10 +4,14 @@ on:
   push:
     branches:
       - fix/unity6-itrtg-crash
+    paths-ignore:
+      - 'feather-itrtg.json'
+      - 'scripts/update_feather_feed.py'
+      - '.github/workflows/unity6-test-ipa.yml'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -82,6 +86,8 @@ jobs:
           done
           plutil -replace HuskBuildCommit -string "$(git rev-parse --short HEAD)" "$APP/Info.plist"
           plutil -replace HuskBuildDate -string "$(date -u '+%Y-%m-%d %H:%M UTC')" "$APP/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "3.1.$GITHUB_RUN_NUMBER" "$APP/Info.plist"
+          plutil -replace CFBundleVersion -string "130.$GITHUB_RUN_NUMBER" "$APP/Info.plist"
           find "$APP" -name '*.dylib' -not -path '*/Frameworks/*.framework/*' -print0 | while IFS= read -r -d '' dylib; do
             codesign --force --sign - --timestamp=none "$dylib"
           done
@@ -104,6 +110,61 @@ jobs:
           path: dist/Husk-Unity6-test.ipa
           if-no-files-found: error
           retention-days: 14
+      - name: Publish direct IPA URL on GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="itrtg-test-$GITHUB_RUN_NUMBER"
+          gh release create "$TAG" \
+            "dist/Husk-Unity6-test.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Husk ITRTG test #$GITHUB_RUN_NUMBER" \
+            --notes "PGS authentication bridge COMPILATION TEST ONLY. Google sign-in is unavailable until an OAuth client authorized for the ITRTG Play Games project is configured. Contains Unity6 fix and SIGTRAP diagnostics. Sign in Feather." \
+            --prerelease
+          echo "Direct IPA: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Husk-Unity6-test.ipa"
+
+      - name: Update Feather source from all GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CANONICAL="debug/itrtg-sigtrap"
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/itrtg-releases.json"
+          git fetch origin "$CANONICAL"
+          git show FETCH_HEAD:scripts/update_feather_feed.py > "$RUNNER_TEMP/update_feather_feed.py"
+          TARGETS=("$GITHUB_REF_NAME")
+          if [[ "$GITHUB_REF_NAME" != "$CANONICAL" ]]; then TARGETS+=("$CANONICAL"); fi
+          INDEX=0
+          for BRANCH in "${TARGETS[@]}"; do
+            INDEX=$((INDEX + 1))
+            WT="$RUNNER_TEMP/feather-feed-$INDEX"
+            git fetch origin "$BRANCH"
+            git worktree add --detach "$WT" FETCH_HEAD
+            git -C "$WT" config user.name "github-actions[bot]"
+            git -C "$WT" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            SRC_URL="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/refs/heads/$BRANCH/feather-itrtg.json"
+            SUCCESS=0
+            for ATTEMPT in 1 2 3; do
+              git -C "$WT" fetch origin "$BRANCH"
+              git -C "$WT" reset --hard FETCH_HEAD
+              python3 "$RUNNER_TEMP/update_feather_feed.py" "$RUNNER_TEMP/itrtg-releases.json" "$WT/feather-itrtg.json" "$SRC_URL"
+              git -C "$WT" add feather-itrtg.json
+              if git -C "$WT" diff --cached --quiet; then
+                SUCCESS=1
+                break
+              fi
+              git -C "$WT" commit -m "chore(feed): refresh published ITRTG builds at run $GITHUB_RUN_NUMBER"
+              if git -C "$WT" push origin "HEAD:refs/heads/$BRANCH"; then
+                SUCCESS=1
+                break
+              fi
+              echo "Concurrent feed update: retrying $ATTEMPT/3"
+            done
+            test "$SUCCESS" -eq 1 || { echo "Could not publish Feather source $BRANCH"; exit 1; }
+            echo "Refreshed Feather source: $SRC_URL"
+          done
       - name: Upload compiler log on failure
         if: failure()
         uses: actions/upload-artifact@v4
