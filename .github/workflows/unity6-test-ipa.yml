@@ -6,6 +6,7 @@ on:
       - fix/unity6-itrtg-crash
       - debug/itrtg-sigtrap
       - perf/unity6-gpu-compositor
+      - test/itrtg-perf-crashfix-only
     paths-ignore:
       - 'feather-itrtg.json'
       - 'scripts/update_feather_feed.py'
@@ -124,8 +125,8 @@ jobs:
             "dist/Husk-Unity6-test.ipa" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Husk ITRTG test #$GITHUB_RUN_NUMBER" \
-            --notes "Unsigned experimental Husk IPA from $GITHUB_SHA. Import in Feather and sign locally with your own certificate. Includes experimental Unity6 fix and SIGTRAP diagnostics." \
+            --title "Husk ITRTG Performance + Crash Fix #$GITHUB_RUN_NUMBER (No Google)" \
+            --notes "PERFORMANCE + CRASH FIX ONLY — NO GOOGLE AUTHENTICATION. Experimental Unity6 memory-mapping startup fix, SIGTRAP crash diagnostics, ITRTG-only GPU-shared compositor (CPU readback fallback). Build $GITHUB_SHA. Sign with Feather. ITRTG official online Google Play Games sync remains unavailable." \
             --prerelease
           echo "Direct IPA: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Husk-Unity6-test.ipa"
 
