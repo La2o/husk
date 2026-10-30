@@ -885,6 +885,36 @@ void tl_javaapp_app_pixels(const void *px, int w, int h)
     E2.on = true; E2.seq++;
     pthread_mutex_unlock(&E2.lk);
 }
+/* Unity 6 fast compositor: the GL context used by its EGL window can share
+ * texture objects with the Java UI compositor. Only ITRTG opts in until the
+ * game-specific renderer has been tested on device. Setting
+ * TL_DISABLE_GPU_COMPOSITOR=1 forces the original CPU readback path.
+ *
+ * eglCreateContext uses this BEFORE Unity's GL context is created; it never
+ * changes the guest's own shared-context hierarchy if that creation fails.
+ */
+void *tl_javaapp_share_context(void *display)
+{
+    if (strcmp(A.pkg, "de.shugasu.itrtg") || getenv("TL_DISABLE_GPU_COMPOSITOR")) return NULL;
+    pthread_mutex_lock(&E2.lk);
+    void *ctx = (E2.ready && E2.dpy == display) ? E2.ui : NULL;
+    pthread_mutex_unlock(&E2.lk);
+    return ctx;
+}
+
+/* Ownership: the app's EGL context owns the texture; the UI context merely
+ * samples it, using GL object sharing. The source thread finishes its copy
+ * before publishing the new object under E2.lk. */
+void tl_javaapp_app_texture(unsigned tex, int w, int h)
+{
+    if (!tex || w <= 0 || h <= 0) return;
+    pthread_mutex_lock(&E2.lk);
+    E2.tex = tex; E2.pw = w; E2.ph = h;
+    E2.x = 0; E2.y = 0; E2.w = A.cfg.width; E2.h = A.cfg.height;
+    E2.on = true; E2.seq++;
+    pthread_mutex_unlock(&E2.lk);
+}
+
 static uint64_t app_frame_seq(void) { pthread_mutex_lock(&E2.lk); uint64_t q = E2.seq; pthread_mutex_unlock(&E2.lk); return q; }
 static bool app_frame_on(void) { pthread_mutex_lock(&E2.lk); bool q = E2.on; pthread_mutex_unlock(&E2.lk); return q; }
 
