@@ -25,6 +25,11 @@
 #include "husk-tl-bionic.h"
 #include "husk-tl-jni.h"
 
+/* Native iOS Keychain-backed identity provider: it returns an ID ONLY after
+ * Google verifies its OAuth token for the exact configured Play Games app.
+ * Returned strdup is owned by this caller and must be freed. */
+extern char *husk_pgs_copy_verified_player_id(void);
+
 bool tl_dexidx_has_class(const char *name);
 jobj *tl_proxy_call(jobj *proxy, const char *iface, const char *name, const char *sig, jobj **args, int nargs);
 
@@ -133,15 +138,44 @@ static void PG_leaderboards(tl_jcall *c) { c->ret = vl(singleton("com/google/and
 static void PG_players(tl_jcall *c) { c->ret = vl(singleton("com/google/android/gms/games/PlayersClient")); }
 static void PG_events(tl_jcall *c) { c->ret = vl(singleton("com/google/android/gms/games/EventsClient")); }
 static void PG_snapshots(tl_jcall *c) { c->ret = vl(singleton("com/google/android/gms/games/SnapshotsClient")); }
-static void PG_initialize(tl_jcall *c) { (void)c; once("Play Games initialised (signed out)"); }
+static void PG_initialize(tl_jcall *c) {
+    (void)c;
+    char *id = husk_pgs_copy_verified_player_id();
+    once(id ? "Play Games initialised (Google-verified game identity)" :
+              "Play Games initialised (not authenticated; publisher-approved Google OAuth client required)");
+    free(id);
+}
 
-/* isAuthenticated / signIn: finished, successfully, with "not authenticated" -- what a signed-out player's phone answers. */
+/* These Tasks may report success only after Google verified an OAuth token
+ * for the exact ITRTG Play Games application. Husk does not fabricate IDs.
+ * Sign in from Husk's ITRTG details BEFORE launching the game, then restart
+ * the translation-layer runtime so signIn()/isAuthenticated() can complete. */
 static void SignIn_result(tl_jcall *c)
 {
+    char *id = husk_pgs_copy_verified_player_id();
     jobj *r = tl_jni_new_object(tl_jni_class("com/google/android/gms/games/AuthenticationResult"));
+    tl_jni_set_field(r, "authenticated", "Z", vz(id != NULL && id[0]));
     c->ret = vl(task_done(r, NULL));
+    if (!id) once("Play Games auth requested without Google-verified ITRTG identity");
+    free(id);
 }
-static void Auth_isAuthenticated(tl_jcall *c) { c->ret = vz(0); }
+static void Auth_isAuthenticated(tl_jcall *c) { c->ret = tl_jni_get_field(c->self, "authenticated", "Z"); }
+static void PG_playerID(tl_jcall *c) {
+    char *id = husk_pgs_copy_verified_player_id();
+    c->ret = vl(id && id[0] ? task_done(tl_jni_new_string(id), NULL) : task_failed());
+    free(id);
+}
+static void PG_player(tl_jcall *c) {
+    char *id = husk_pgs_copy_verified_player_id();
+    if (!id || !id[0]) { c->ret = vl(task_failed()); free(id); return; }
+    jobj *player = tl_jni_new_object(tl_jni_class("com/google/android/gms/games/Player"));
+    tl_jni_set_field(player, "playerId", "Ljava/lang/String;", vl(tl_jni_new_string(id)));
+    c->ret = vl(task_done(player, NULL));
+    free(id);
+}
+static void PG_Player_getPlayerId(tl_jcall *c) {
+    c->ret = tl_jni_get_field(c->self, "playerId", "Ljava/lang/String;");
+}
 static void Task_failed(tl_jcall *c) { c->ret = vl(task_failed()); }
 
 /* ----------------------------------------------------------------- Billing */
@@ -274,6 +308,7 @@ static const struct { const char *name, *super; } k_classes[] = {
     { "com/google/android/gms/games/PlayGamesSdk", "java/lang/Object" }, { "com/google/android/gms/games/PlayGames", "java/lang/Object" },
     { "com/google/android/gms/games/GamesSignInClient", "java/lang/Object" },
     { "com/google/android/gms/games/AuthenticationResult", "java/lang/Object" },
+    { "com/google/android/gms/games/Player", "java/lang/Object" },
     { "com/google/android/gms/games/AchievementsClient", "java/lang/Object" },
     { "com/google/android/gms/games/LeaderboardsClient", "java/lang/Object" },
     { "com/google/android/gms/games/PlayersClient", "java/lang/Object" },
@@ -375,8 +410,9 @@ static const tl_jhle k_gms[] = {
     M(LC, "submitScoreImmediate", "(Ljava/lang/String;J)Lcom/google/android/gms/tasks/Task;", Task_failed),
     M(LC, "getAllLeaderboardsIntent", "()Lcom/google/android/gms/tasks/Task;", Task_failed),
     M(LC, "getLeaderboardIntent", "(Ljava/lang/String;)Lcom/google/android/gms/tasks/Task;", Task_failed),
-    M("com/google/android/gms/games/PlayersClient", "getCurrentPlayer", "()Lcom/google/android/gms/tasks/Task;", Task_failed),
-    M("com/google/android/gms/games/PlayersClient", "getCurrentPlayerId", "()Lcom/google/android/gms/tasks/Task;", Task_failed),
+    M("com/google/android/gms/games/PlayersClient", "getCurrentPlayer", "()Lcom/google/android/gms/tasks/Task;", PG_player),
+    M("com/google/android/gms/games/PlayersClient", "getCurrentPlayerId", "()Lcom/google/android/gms/tasks/Task;", PG_playerID),
+    M("com/google/android/gms/games/Player", "getPlayerId", "()Ljava/lang/String;", PG_Player_getPlayerId),
     M("com/google/android/gms/games/EventsClient", "increment", "(Ljava/lang/String;I)V", Noop),
 
     /* Firebase's helpers */
