@@ -6,6 +6,10 @@ on:
       - fix/unity6-itrtg-crash
       - debug/itrtg-sigtrap
       - feature/itrtg-pgs-verified-auth
+    paths-ignore:
+      - 'feather-itrtg.json'
+      - 'scripts/update_feather_feed.py'
+      - '.github/workflows/unity6-test-ipa.yml'
   workflow_dispatch:
 
 permissions:
