@@ -5,6 +5,7 @@ on:
     branches:
       - fix/unity6-itrtg-crash
       - debug/itrtg-sigtrap
+      - perf/unity6-gpu-compositor
   workflow_dispatch:
 
 permissions:
