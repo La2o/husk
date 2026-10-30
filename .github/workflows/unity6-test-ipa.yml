@@ -6,6 +6,10 @@ on:
       - fix/unity6-itrtg-crash
       - debug/itrtg-sigtrap
       - feature/itrtg-icloud-saves
+    paths-ignore:
+      - 'feather-itrtg.json'
+      - 'scripts/update_feather_feed.py'
+      - '.github/workflows/unity6-test-ipa.yml'
   workflow_dispatch:
 
 permissions:
@@ -125,48 +129,46 @@ jobs:
             --prerelease
           echo "Direct IPA: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Husk-Unity6-test.ipa"
 
-      - name: Refresh install-once Feather source
+      - name: Update Feather source from all GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import json, os
-          from datetime import datetime, timezone
-          from pathlib import Path
-          repo=os.environ["GITHUB_REPOSITORY"]
-          number=os.environ["GITHUB_RUN_NUMBER"]
-          branch=os.environ["GITHUB_REF_NAME"]
-          url=f"https://github.com/{repo}/releases/download/itrtg-test-{number}/Husk-Unity6-test.ipa"
-          source_url=f"https://raw.githubusercontent.com/{repo}/refs/heads/{branch}/feather-itrtg.json"
-          icon=f"https://raw.githubusercontent.com/{repo}/refs/heads/main/src/app/Husk/Assets.xcassets/AppIcon.appiconset/Icon-Default.png"
-          today=datetime.now(timezone.utc).date().isoformat()
-          app={
-              "name": "Husk ITRTG Test",
-              "bundleIdentifier": "com.husk.app",
-              "developerName": "Husk open-source community fork",
-              "subtitle": "Rapid Unity 6 test builds",
-              "localizedDescription": "Experimental Unity 6 and SIGTRAP diagnostic build for Idling to Rule the Gods. Sign with your own certificate in Feather.",
-              "iconURL": icon,
-              "tintColor": "5966D6",
-              "version": f"3.1.{number}",
-              "buildVersion": f"130.{number}",
-              "versionDate": today,
-              "downloadURL": url,
-              "size": Path("dist/Husk-Unity6-test.ipa").stat().st_size,
-              "versions": [{"version":f"3.1.{number}", "buildVersion":f"130.{number}",
-                            "date":today, "downloadURL":url,
-                            "size":Path("dist/Husk-Unity6-test.ipa").stat().st_size,
-                            "localizedDescription":"ITRTG Unity 6/SIGTRAP diagnostics"}]
-          }
-          doc={"name": "Husk ITRTG Test Builds", "identifier": "com.la2o.husk.itrtg.test",
-               "sourceURL": source_url, "apps": [app]}
-          Path("feather-itrtg.json").write_text(json.dumps(doc, indent=2)+"\n")
-          print("Feather source:",source_url)
-          PY
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add feather-itrtg.json
-          git commit -m "chore(feed): publish ITRTG test $GITHUB_RUN_NUMBER for Feather"
-          git push origin "HEAD:$GITHUB_REF_NAME"
+          CANONICAL="debug/itrtg-sigtrap"
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/itrtg-releases.json"
+          git fetch origin "$CANONICAL"
+          git show FETCH_HEAD:scripts/update_feather_feed.py > "$RUNNER_TEMP/update_feather_feed.py"
+          TARGETS=("$GITHUB_REF_NAME")
+          if [[ "$GITHUB_REF_NAME" != "$CANONICAL" ]]; then TARGETS+=("$CANONICAL"); fi
+          INDEX=0
+          for BRANCH in "${TARGETS[@]}"; do
+            INDEX=$((INDEX + 1))
+            WT="$RUNNER_TEMP/feather-feed-$INDEX"
+            git fetch origin "$BRANCH"
+            git worktree add --detach "$WT" FETCH_HEAD
+            git -C "$WT" config user.name "github-actions[bot]"
+            git -C "$WT" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            SRC_URL="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/refs/heads/$BRANCH/feather-itrtg.json"
+            SUCCESS=0
+            for ATTEMPT in 1 2 3; do
+              git -C "$WT" fetch origin "$BRANCH"
+              git -C "$WT" reset --hard FETCH_HEAD
+              python3 "$RUNNER_TEMP/update_feather_feed.py" "$RUNNER_TEMP/itrtg-releases.json" "$WT/feather-itrtg.json" "$SRC_URL"
+              git -C "$WT" add feather-itrtg.json
+              if git -C "$WT" diff --cached --quiet; then
+                SUCCESS=1
+                break
+              fi
+              git -C "$WT" commit -m "chore(feed): refresh published ITRTG builds at run $GITHUB_RUN_NUMBER"
+              if git -C "$WT" push origin "HEAD:refs/heads/$BRANCH"; then
+                SUCCESS=1
+                break
+              fi
+              echo "Concurrent feed update: retrying $ATTEMPT/3"
+            done
+            test "$SUCCESS" -eq 1 || { echo "Could not publish Feather source $BRANCH"; exit 1; }
+            echo "Refreshed Feather source: $SRC_URL"
+          done
       - name: Upload compiler log on failure
         if: failure()
         uses: actions/upload-artifact@v4
