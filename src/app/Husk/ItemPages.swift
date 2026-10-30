@@ -125,6 +125,7 @@ struct GamePage: View {
 
     @ObservedObject private var store = TranslationLayerStore.shared
     @ObservedObject private var jit = JITCoordinator.shared
+    @ObservedObject private var playGames = OfficialPlayGames.shared
     @Environment(\.dismiss) private var dismiss
     @State private var playing = false
     @State private var confirmRemove = false
@@ -219,6 +220,30 @@ struct GamePage: View {
                 }
                 HuskLink(value: LibraryRoute.gameReport(app.id)) {
                     Label("Technical Details", systemImage: "cpu")
+                }
+            }
+
+            // PGS is a true Google game-specific identity, NOT the Play Store
+            // account downloader. Never offer online save under a fake login.
+            if app.packageName == "de.shugasu.itrtg" {
+                Section {
+                    LabeledContent("Authentication", value: playGames.playerID == nil ? "Not signed in" : "Google-verified")
+                    if playGames.playerID != nil {
+                        Button("Sign Out of Play Games", role: .destructive) { playGames.signOut() }
+                    } else {
+                        Button {
+                            Task { await playGames.signIn() }
+                        } label: {
+                            Label("Sign in to ITRTG Play Games", systemImage: "person.crop.circle.badge.checkmark")
+                        }
+                        .disabled(playGames.busy || !playGames.isConfigured)
+                    }
+                    if playGames.busy { ProgressView("Checking Google authentication…") }
+                } header: {
+                    Text("Official Google Play Games")
+                } footer: {
+                    Text(playGames.isConfigured ? playGames.message :
+                        "A Google OAuth client associated with Shugasu's ITRTG Play Games project is required. Without publisher authorization, this build cannot sign you in. This does not change or upload saves.")
                 }
             }
 
