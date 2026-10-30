@@ -403,7 +403,7 @@ static bool gpu_comp_copy(EGLDisplay d, EGLSurface s)
     static __thread struct {
         EGLSurface surface;
         unsigned tex[2];
-        int width, height, next;
+        int width[2], height[2], next;
         bool disabled;
     } cache;
     if (cache.surface != s) {
@@ -422,20 +422,15 @@ static bool gpu_comp_copy(EGLDisplay d, EGLSurface s)
     unsigned idx = (unsigned)(cache.next++ & 1);
     if (!cache.tex[idx]) a_glGenTextures(1, &cache.tex[idx]);
     a_glBindTexture(0x0DE1 /* GL_TEXTURE_2D */, cache.tex[idx]);
-    if (cache.width != w || cache.height != h) {
+    if (cache.width[idx] != w || cache.height[idx] != h) {
         a_glTexParameteri(0x0DE1, 0x2801 /* MIN_FILTER */, 0x2601 /* LINEAR */);
         a_glTexParameteri(0x0DE1, 0x2800 /* MAG_FILTER */, 0x2601);
         a_glTexParameteri(0x0DE1, 0x2802 /* WRAP_S */, 0x812F /* CLAMP_TO_EDGE */);
         a_glTexParameteri(0x0DE1, 0x2803 /* WRAP_T */, 0x812F);
         a_glTexImage2D(0x0DE1, 0, 0x1908 /* RGBA */, w, h, 0,
                        0x1908, 0x1401 /* UNSIGNED_BYTE */, NULL);
-        cache.width = w; cache.height = h;
-        /* Resize BOTH ping-pong textures before the second one is copied. */
-        if (cache.tex[1 - idx]) {
-            a_glBindTexture(0x0DE1, cache.tex[1 - idx]);
-            a_glTexImage2D(0x0DE1, 0, 0x1908, w, h, 0, 0x1908, 0x1401, NULL);
-            a_glBindTexture(0x0DE1, cache.tex[idx]);
-        }
+        cache.width[idx] = w;
+        cache.height[idx] = h;
     }
     a_glCopyTexSubImage2D(0x0DE1, 0, 0, 0, 0, 0, w, h);
     a_glFinish();
