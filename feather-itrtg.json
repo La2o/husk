@@ -13,12 +13,36 @@
       "iconURL": "https://raw.githubusercontent.com/La2o/husk/refs/heads/main/src/app/Husk/Assets.xcassets/AppIcon.appiconset/Icon-Default.png",
       "tintColor": "5966D6",
       "category": "utilities",
-      "version": "3.1.7",
-      "buildVersion": "130.7",
+      "version": "3.1.11",
+      "buildVersion": "130.11",
       "versionDate": "2026-10-30",
-      "downloadURL": "https://github.com/La2o/husk/releases/download/itrtg-test-7/Husk-Unity6-test.ipa",
-      "size": 140681132,
+      "downloadURL": "https://github.com/La2o/husk/releases/download/itrtg-test-11/Husk-Unity6-test.ipa",
+      "size": 140648757,
       "versions": [
+        {
+          "version": "3.1.11",
+          "buildVersion": "130.11",
+          "date": "2026-10-30",
+          "localizedDescription": "PERFORMANCE + CRASH FIX ONLY — NO GOOGLE AUTHENTICATION. Experimental Unity6 memory-mapping startup fix, SIGTRAP crash diagnostics, ITRTG-only GPU-shared compositor (CPU readback fallback). Build 59fcae97b0c06c4dfe95675a0350c48903fb661e. Sign with Feather. ITRTG official online Google Play Games sync remains unavailable.",
+          "downloadURL": "https://github.com/La2o/husk/releases/download/itrtg-test-11/Husk-Unity6-test.ipa",
+          "size": 140648757
+        },
+        {
+          "version": "3.1.9",
+          "buildVersion": "130.9",
+          "date": "2026-10-30",
+          "localizedDescription": "Unsigned experimental Husk IPA from 0aa31dce2d55905d50bf7e52b13aa7ddbe3bfaa0. Import in Feather and sign locally with your own certificate. Includes experimental Unity6 fix and SIGTRAP diagnostics.",
+          "downloadURL": "https://github.com/La2o/husk/releases/download/itrtg-test-9/Husk-Unity6-test.ipa",
+          "size": 140644370
+        },
+        {
+          "version": "3.1.8",
+          "buildVersion": "130.8",
+          "date": "2026-10-30",
+          "localizedDescription": "Unsigned experimental Husk IPA from e88f47b7d23f4b58b9b6ce3d386d0f9beec8b88b. Import in Feather and sign locally with your own certificate. Includes experimental Unity6 fix and SIGTRAP diagnostics.",
+          "downloadURL": "https://github.com/La2o/husk/releases/download/itrtg-test-8/Husk-Unity6-test.ipa",
+          "size": 140644362
+        },
         {
           "version": "3.1.7",
           "buildVersion": "130.7",
