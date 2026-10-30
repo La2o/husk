@@ -5,6 +5,7 @@ on:
     branches:
       - fix/unity6-itrtg-crash
       - debug/itrtg-sigtrap
+      - feature/itrtg-pgs-verified-auth
   workflow_dispatch:
 
 permissions:
@@ -120,7 +121,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Husk ITRTG test #$GITHUB_RUN_NUMBER" \
-            --notes "Unsigned experimental Husk IPA from $GITHUB_SHA. Import in Feather and sign locally with your own certificate. Includes experimental Unity6 fix and SIGTRAP diagnostics." \
+            --notes "PGS authentication bridge COMPILATION TEST ONLY. Google sign-in is unavailable until an OAuth client authorized for the ITRTG Play Games project is configured. Contains Unity6 fix and SIGTRAP diagnostics. Sign in Feather." \
             --prerelease
           echo "Direct IPA: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Husk-Unity6-test.ipa"
 
@@ -143,7 +144,7 @@ jobs:
               "bundleIdentifier": "com.husk.app",
               "developerName": "Husk open-source community fork",
               "subtitle": "Rapid Unity 6 test builds",
-              "localizedDescription": "Experimental Unity 6 and SIGTRAP diagnostic build for Idling to Rule the Gods. Sign with your own certificate in Feather.",
+              "localizedDescription": "Experimental ITRTG Google Play Games bridge compilation test. Sign-in requires a publisher-approved OAuth client and is unavailable in an unconfigured build. Sign with your own certificate in Feather.",
               "iconURL": icon,
               "tintColor": "5966D6",
               "version": f"3.1.{number}",
