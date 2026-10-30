@@ -1,7 +1,7 @@
 {
   "name": "Husk ITRTG Test Builds",
   "identifier": "com.la2o.husk.itrtg.test",
-  "sourceURL": "https://raw.githubusercontent.com/La2o/husk/refs/heads/debug/itrtg-sigtrap/feather-itrtg.json",
+  "sourceURL": "https://raw.githubusercontent.com/La2o/husk/refs/heads/perf/unity6-gpu-compositor/feather-itrtg.json",
   "apps": [
     {
       "name": "Husk ITRTG Test",
@@ -11,18 +11,18 @@
       "localizedDescription": "Experimental Unity 6 and SIGTRAP diagnostic build for Idling to Rule the Gods. Sign with your own certificate in Feather.",
       "iconURL": "https://raw.githubusercontent.com/La2o/husk/refs/heads/main/src/app/Husk/Assets.xcassets/AppIcon.appiconset/Icon-Default.png",
       "tintColor": "5966D6",
-      "version": "3.1.4",
-      "buildVersion": "130.4",
-      "versionDate": "2026-10-29",
-      "downloadURL": "https://github.com/La2o/husk/releases/download/itrtg-test-4/Husk-Unity6-test.ipa",
-      "size": 140644381,
+      "version": "3.1.6",
+      "buildVersion": "130.6",
+      "versionDate": "2026-10-30",
+      "downloadURL": "https://github.com/La2o/husk/releases/download/itrtg-test-6/Husk-Unity6-test.ipa",
+      "size": 140648755,
       "versions": [
         {
-          "version": "3.1.4",
-          "buildVersion": "130.4",
-          "date": "2026-10-29",
-          "downloadURL": "https://github.com/La2o/husk/releases/download/itrtg-test-4/Husk-Unity6-test.ipa",
-          "size": 140644381,
+          "version": "3.1.6",
+          "buildVersion": "130.6",
+          "date": "2026-10-30",
+          "downloadURL": "https://github.com/La2o/husk/releases/download/itrtg-test-6/Husk-Unity6-test.ipa",
+          "size": 140648755,
           "localizedDescription": "ITRTG Unity 6/SIGTRAP diagnostics"
         }
       ]
