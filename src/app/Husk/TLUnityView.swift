@@ -939,7 +939,7 @@ struct TLCocosAttemptView: View {
             if uiHidden { showHint() }
             CrashReport.gameStarted(app)
             PlayGamesSignIn.gameStarting(app)
-            settings.frameHandoff.apply()
+            settings.applyRuntimeOptions()
             padLayout = PadLayout.load(app.id)
             model.start()
         }

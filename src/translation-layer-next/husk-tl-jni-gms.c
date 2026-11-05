@@ -26,9 +26,11 @@
 
 #include "husk-tl-bionic.h"
 #include "husk-tl-jni.h"
+#include "husk-tl-jni-internal.h"
 #include "husk-tl-playgames.h"
 
 bool tl_dexidx_has_class(const char *name);
+bool tl_dvm_defines_class(const char *jni_name);      /* the Java runtime's classes (the APK's among them) */
 jobj *tl_proxy_call(jobj *proxy, const char *iface, const char *name, const char *sig, jobj **args, int nargs);
 
 static jvalue vl(void *p) { jvalue v; v.j = 0; v.l = p; return v; }
@@ -164,9 +166,56 @@ static bool signed_in_now(void)
 #define HAUTH "husk/gms/AuthenticationResult"
 #define HPLAYER "husk/gms/Player"
 
+/* On Husk's Java runtime (tl_gms_install_java) the game's C# finds a method with Java reflection, which sees only classes a
+ * DEX defines: the answers there are objects of the APK's own classes -- real Tasks, its AuthenticationResult and PlayerEntity. */
+static bool g_java;
+
+/* `new cls(args)` through the constructor of that signature; NULL if there is none or it threw. */
+static jobj *construct(const char *cls, const char *sig, const jvalue *args)
+{
+    tl_jclass *k = tl_jni_class(cls);
+    tl_jmeth *m = tl_jni_method(k, "<init>", sig, false);
+    if (!m || !m->exists || !m->dvm) return NULL;
+    jobj *o = tl_jni_new_object(k);
+    tl_jni_invoke(o, m, true, args);
+    if (tl_jni_pending()) { tl_jni_clear(); return NULL; }
+    return o;
+}
+
+/* An ApiException(new Status(code, message)), as Play services fails a Task; a plain Exception where the APK lacks those. */
+static jobj *api_exception(const char *error)
+{
+    jvalue sa[2]; sa[0].j = 0; sa[0].i = atoi(error); sa[1] = vl(tl_jni_new_string(error));
+    jobj *st = construct("com/google/android/gms/common/api/Status", "(ILjava/lang/String;)V", sa);
+    jvalue ea = vl(st);
+    jobj *ex = st ? construct("com/google/android/gms/common/api/ApiException", "(Lcom/google/android/gms/common/api/Status;)V", &ea) : NULL;
+    if (!ex) { jvalue m = vl(tl_jni_new_string(error)); ex = construct("java/lang/Exception", "(Ljava/lang/String;)V", &m); }
+    return ex;
+}
+
+/* A real Task, finished: the APK's own TaskCompletionSource made it, so its listeners, getResult and Tasks.whenAll are the
+ * library's own, run as on a phone (listeners on the main thread). NULL if the APK has no play-services-tasks. */
+static jobj *real_task(jobj *result, const char *error)
+{
+    jobj *tcs = construct("com/google/android/gms/tasks/TaskCompletionSource", "()V", NULL);
+    if (!tcs) return NULL;
+    jvalue a = vl(error ? api_exception(error) : result);
+    if (error) tl_jni_call(tcs, "setException", "(Ljava/lang/Exception;)V", &a);
+    else tl_jni_call(tcs, "setResult", "(Ljava/lang/Object;)V", &a);
+    if (tl_jni_pending()) { tl_jni_clear(); return NULL; }
+    jobj *t = tl_jni_call(tcs, "getTask", "()Lcom/google/android/gms/tasks/Task;", NULL).l;
+    if (tl_jni_pending()) { tl_jni_clear(); return NULL; }
+    return t;
+}
+
 /* A Task that has already finished: with a result, or with an exception ("<status code>: <message>"). */
 static jobj *task_done(jobj *result, const char *error)
 {
+    if (g_java) {
+        jobj *real = real_task(result, error);
+        if (real) return real;
+        static int said; if (!said++) tl_log_line("gms: the APK has no TaskCompletionSource to answer Play Games with; answering with Husk's own Tasks");
+    }
     jobj *t = tl_jni_new_object(tl_jni_class(HTASK));
     tl_jni_set_field(t, "result", "Ljava/lang/Object;", vl(result));
     tl_jni_set_field(t, "successful", "Z", vz(error == NULL));
@@ -239,7 +288,7 @@ static void PG_initialize(tl_jcall *c) { (void)c; once("Play Games initialised")
  * as Play services answers, signed out included. */
 static void sign_in(tl_jcall *c, bool interactive)
 {
-    jobj *r = tl_jni_new_object(tl_jni_class(HAUTH));
+    jobj *r = tl_jni_new_object(tl_jni_class(g_java ? "com/google/android/gms/games/AuthenticationResult" : HAUTH));
     bool in = current_player(interactive, NULL);
     tl_jni_set_field(r, "authenticated", "Z", vz(in));
     c->ret = vl(task_done(r, NULL));
@@ -251,9 +300,12 @@ static void Auth_isAuthenticated(tl_jcall *c) { c->ret = tl_jni_get_field(c->sel
 static void Task_failed(tl_jcall *c) { c->ret = vl(signed_in_now() ? task_unavailable() : task_failed()); }
 
 #define PLAYER "com/google/android/gms/games/Player"
+#define PLAYER_ENTITY "com/google/android/gms/games/PlayerEntity"
 static jobj *player_object(const tl_pgs_player *p)
 {
-    jobj *o = tl_jni_new_object(tl_jni_class(HPLAYER));
+    /* on the Java runtime, the APK's PlayerEntity: its getters are answered here (below), with this player's */
+    const char *cls = g_java && tl_dvm_defines_class(PLAYER_ENTITY) ? PLAYER_ENTITY : HPLAYER;
+    jobj *o = tl_jni_new_object(tl_jni_class(cls));
     tl_jni_set_field(o, "playerId", "Ljava/lang/String;", vl(tl_jni_new_string(p->id)));
     tl_jni_set_field(o, "displayName", "Ljava/lang/String;", vl(tl_jni_new_string(p->name)));
     tl_jni_set_field(o, "iconImageUrl", "Ljava/lang/String;", vl(p->icon[0] ? tl_jni_new_string(p->icon) : NULL));
@@ -305,6 +357,7 @@ static void SignIn_serverAccess(tl_jcall *c)
 /* requestServerSideAccess(serverClientId, forceRefresh, List<AuthScope>): the same code, with the OpenID scopes the game asked
  * for (EMAIL, PROFILE, OPEN_ID), as an AuthResponse; the scopes granted are the ones asked for. */
 #define HAUTHRESP "husk/gms/AuthResponse"
+#define AUTHRESP "com/google/android/gms/games/gamessignin/AuthResponse"
 static void SignIn_serverAccessScopes(tl_jcall *c)
 {
     const char *client = tl_jni_string(c->args[0].l);
@@ -323,7 +376,8 @@ static void SignIn_serverAccessScopes(tl_jcall *c)
     }
     char *code = tl_pgs_ask("servercode", client, scopes, c->args[1].z);
     if (code && code[0] && code[0] != '!') {
-        jobj *r = tl_jni_new_object(tl_jni_class(HAUTHRESP));
+        const char *rc = g_java && tl_dvm_defines_class(AUTHRESP) ? AUTHRESP : HAUTHRESP;
+        jobj *r = tl_jni_new_object(tl_jni_class(rc));
         tl_jni_set_field(r, "authCode", "Ljava/lang/String;", vl(tl_jni_new_string(code)));
         tl_jni_set_field(r, "grantedScopes", "Ljava/util/List;", vl(list));
         c->ret = vl(task_done(r, NULL));
@@ -646,4 +700,66 @@ void tl_gms_install(void)
     if (getenv("TL_NO_GMS")) return;      /* debug knob: run a game without any of this, to compare */
     for (size_t i = 0; i < sizeof(k_classes) / sizeof(k_classes[0]); i++) tl_jni_declare(k_classes[i].name, k_classes[i].super);
     tl_jni_register_hle(k_gms);
+}
+
+/* ------------------------------------------------- on Husk's Java runtime */
+
+/*
+ * Husk's Java runtime (Unity 6 games, Java apps) runs the APK's own Java, Play services' client libraries included, and those
+ * find no Play services to bind to ("unable to connect to service ... games.internal.connect.service.START"): a game asking
+ * through them is never signed in. Its C# asks through JNI, and an answer registered here comes before the APK's Java for a
+ * JNI call. So the Java runtime gets Play Games' entry points and clients -- the classes the Play Games Unity plugin calls,
+ * which its ProGuard rules keep under these names -- and nothing else of the table above: not ClassLoader, Billing, Firebase's
+ * helpers or Tasks, which the real framework and the APK's own Java answer there. Tasks are the APK's own (real_task), so
+ * their listeners and Tasks.whenAll are the library's; the clients are objects of the APK's interfaces, the results of its
+ * AuthenticationResult and PlayerEntity, whose methods are answered here, as reflection finds them declared there.
+ */
+#define PE PLAYER_ENTITY
+static const tl_jhle k_pgs_java[] = {
+    M("com/google/android/gms/games/PlayGamesSdk", "initialize", "(Landroid/content/Context;)V", PG_initialize),
+    M("com/google/android/gms/games/PlayGames", "getGamesSignInClient", "(Landroid/app/Activity;)Lcom/google/android/gms/games/GamesSignInClient;", PG_signInClient),
+    M("com/google/android/gms/games/PlayGames", "getAchievementsClient", "(Landroid/app/Activity;)Lcom/google/android/gms/games/AchievementsClient;", PG_achievements),
+    M("com/google/android/gms/games/PlayGames", "getLeaderboardsClient", "(Landroid/app/Activity;)Lcom/google/android/gms/games/LeaderboardsClient;", PG_leaderboards),
+    M("com/google/android/gms/games/PlayGames", "getPlayersClient", "(Landroid/app/Activity;)Lcom/google/android/gms/games/PlayersClient;", PG_players),
+    M("com/google/android/gms/games/PlayGames", "getEventsClient", "(Landroid/app/Activity;)Lcom/google/android/gms/games/EventsClient;", PG_events),
+    M("com/google/android/gms/games/PlayGames", "getSnapshotsClient", "(Landroid/app/Activity;)Lcom/google/android/gms/games/SnapshotsClient;", PG_snapshots),
+    M("com/google/android/gms/games/GamesSignInClient", "isAuthenticated", "()Lcom/google/android/gms/tasks/Task;", SignIn_check),
+    M("com/google/android/gms/games/GamesSignInClient", "signIn", "()Lcom/google/android/gms/tasks/Task;", SignIn_signIn),
+    M("com/google/android/gms/games/GamesSignInClient", "requestServerSideAccess", "(Ljava/lang/String;Z)Lcom/google/android/gms/tasks/Task;", SignIn_serverAccess),
+    M("com/google/android/gms/games/GamesSignInClient", "requestServerSideAccess", "(Ljava/lang/String;ZLjava/util/List;)Lcom/google/android/gms/tasks/Task;", SignIn_serverAccessScopes),
+    M("com/google/android/gms/games/AuthenticationResult", "isAuthenticated", "()Z", Auth_isAuthenticated),
+    M("com/google/android/gms/games/PlayersClient", "getCurrentPlayer", "()Lcom/google/android/gms/tasks/Task;", PC_currentPlayer),
+    M("com/google/android/gms/games/PlayersClient", "getCurrentPlayerId", "()Lcom/google/android/gms/tasks/Task;", PC_currentPlayerId),
+    M(PE, "getPlayerId", "()Ljava/lang/String;", Player_id), M(PE, "getDisplayName", "()Ljava/lang/String;", Player_name),
+    M(PE, "getIconImageUrl", "()Ljava/lang/String;", Player_icon), M(PE, "getHiResImageUrl", "()Ljava/lang/String;", Player_hires),
+    M(PE, "getTitle", "()Ljava/lang/String;", Player_title),
+    M(PE, "hasIconImage", "()Z", Player_hasIcon), M(PE, "hasHiResImage", "()Z", Player_hasHiRes),
+    M(AUTHRESP, "getAuthCode", "()Ljava/lang/String;", AuthResp_code), M(AUTHRESP, "getGrantedScopes", "()Ljava/util/List;", AuthResp_scopes),
+    M(AC, "unlock", "(Ljava/lang/String;)V", Noop), M(AC, "increment", "(Ljava/lang/String;I)V", Noop),
+    M(AC, "reveal", "(Ljava/lang/String;)V", Noop), M(AC, "setSteps", "(Ljava/lang/String;I)V", Noop),
+    M(AC, "unlockImmediate", "(Ljava/lang/String;)Lcom/google/android/gms/tasks/Task;", Task_failed),
+    M(AC, "incrementImmediate", "(Ljava/lang/String;I)Lcom/google/android/gms/tasks/Task;", Task_failed),
+    M(AC, "revealImmediate", "(Ljava/lang/String;)Lcom/google/android/gms/tasks/Task;", Task_failed),
+    M(AC, "setStepsImmediate", "(Ljava/lang/String;I)Lcom/google/android/gms/tasks/Task;", Task_failed),
+    M(AC, "load", "(Z)Lcom/google/android/gms/tasks/Task;", Task_failed),
+    M(AC, "getAchievementsIntent", "()Lcom/google/android/gms/tasks/Task;", Task_failed),
+    M(LC, "submitScore", "(Ljava/lang/String;J)V", Noop), M(LC, "submitScore", "(Ljava/lang/String;JLjava/lang/String;)V", Noop),
+    M(LC, "submitScoreImmediate", "(Ljava/lang/String;J)Lcom/google/android/gms/tasks/Task;", Task_failed),
+    M(LC, "getAllLeaderboardsIntent", "()Lcom/google/android/gms/tasks/Task;", Task_failed),
+    M(LC, "getLeaderboardIntent", "(Ljava/lang/String;)Lcom/google/android/gms/tasks/Task;", Task_failed),
+    M("com/google/android/gms/games/EventsClient", "increment", "(Ljava/lang/String;I)V", Noop),
+    { NULL, NULL, NULL, NULL }
+};
+
+void tl_gms_install_java(void)
+{
+    if (getenv("TL_NO_GMS")) return;
+    g_java = true;
+    static const char *const own[] = { HTASK, HAUTH, HPLAYER, HAUTHRESP };      /* the fallbacks, where the APK lacks a class */
+    for (size_t i = 0; i < sizeof(own) / sizeof(own[0]); i++) tl_jni_declare(own[i], "java/lang/Object");
+    tl_jni_declare(HAPIEX, "java/lang/Exception");
+    tl_jni_register_hle(k_pgs_java);
+    tl_log_line("gms: Play Games answered by Husk on the Java runtime (PlayerEntity %s, TaskCompletionSource %s)",
+                tl_dvm_defines_class(PLAYER_ENTITY) ? "found" : "missing",
+                tl_dvm_defines_class("com/google/android/gms/tasks/TaskCompletionSource") ? "found" : "missing");
 }

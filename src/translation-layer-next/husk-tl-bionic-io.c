@@ -1108,7 +1108,7 @@ static int prot_filter(int prot, const char *what)
  * and expect it to come back clean. Darwin's MADV_DONTNEED keeps the contents, so the pages are
  * replaced with fresh ones at the same protection instead.
  */
-#define MAX_ANON 4096
+#define MAX_ANON 65536      /* a Unity 6 game with mimalloc and IL2CPP's GC makes thousands; one past the end is never zeroed */
 static struct { uintptr_t addr; size_t len; } g_anon[MAX_ANON];
 static int g_nanon;
 static pthread_mutex_t g_anon_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1120,6 +1120,10 @@ static void anon_add(void *addr, size_t len)
     anon_remove((uintptr_t)addr, len);                       /* replace what this overlaps, keeping the parts outside it */
     pthread_mutex_lock(&g_anon_lock);
     if (g_nanon < MAX_ANON) { g_anon[g_nanon].addr = (uintptr_t)addr; g_anon[g_nanon].len = len; g_nanon++; }
+    else {
+        static bool told;
+        if (!told) { told = true; tl_log_line("bionic: more than %d anonymous mappings: madvise(MADV_DONTNEED) no longer zero-fills the new ones (allocators that count on it may see old data)", MAX_ANON); }
+    }
     pthread_mutex_unlock(&g_anon_lock);
 }
 
@@ -1960,7 +1964,7 @@ static long linux_syscall_impl(long a0, long a1, long a2, long a3, long a4, long
     case 278: arc4random_buf((void *)a0, (size_t)a1); return a1;                        /* getrandom */
     case 283: return 0;                                                                 /* membarrier */
     case 134: case 135: return 0;                                                       /* rt_sigaction, rt_sigprocmask: accepted */
-    case 233: return 0;                                                                 /* madvise */
+    case 233: return b_madvise((void *)a0, (size_t)a1, (int)a2);                        /* madvise: DONTNEED zero-fills, as libc's */
     case 122: case 123: return 0;                                                       /* sched_setaffinity / getaffinity */
     case 167: return 0;                                                                 /* prctl */
     case 160: { int tl_bionic_uname(void *); return tl_bionic_uname((void *)a0); }    /* uname: filled in, as the libc call is */

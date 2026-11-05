@@ -85,6 +85,14 @@ struct TLAppSettings: Codable, Equatable {
         }
     }
 
+    /// What the runtime should trace for this run, set before the game starts (one game per run of Husk).
+    func applyRuntimeOptions() {
+        frameHandoff.apply()
+        for name in ["TL_FILE_TRACE", "TL_NET_TRACE"] {
+            if detailedLog { setenv(name, "1", 1) } else { unsetenv(name) }
+        }
+    }
+
     /// Where the app opens: full screen, or a window over Husk that can be moved, resized and minimised (Multitasking).
     enum WindowMode: String, Codable, CaseIterable, Identifiable {
         /// As Settings › Multitasking says for every app.
@@ -103,6 +111,8 @@ struct TLAppSettings: Codable, Equatable {
     var window: WindowMode = .auto
     var resolution: Resolution = .high
     var frameHandoff: FrameHandoff = .auto
+    /// For a report: every file the game opens and every network call, in its log (TL_FILE_TRACE, TL_NET_TRACE).
+    var detailedLog = false
     /// The frames-per-second readout in the top bar.
     var showStats = true
     /// Start with nothing over the picture: no bar, no controller, no readout. Three fingers tapped together bring them back.
@@ -125,6 +135,7 @@ struct TLAppSettings: Codable, Equatable {
         orientation = try c.decodeIfPresent(Orientation.self, forKey: .orientation) ?? .auto
         resolution = try c.decodeIfPresent(Resolution.self, forKey: .resolution) ?? .high
         frameHandoff = try c.decodeIfPresent(FrameHandoff.self, forKey: .frameHandoff) ?? .auto
+        detailedLog = try c.decodeIfPresent(Bool.self, forKey: .detailedLog) ?? false
         showStats = try c.decodeIfPresent(Bool.self, forKey: .showStats) ?? true
         cleanView = try c.decodeIfPresent(Bool.self, forKey: .cleanView) ?? false
         keepAwake = try c.decodeIfPresent(Bool.self, forKey: .keepAwake) ?? true
@@ -221,6 +232,15 @@ struct TLAppSettingsView: View {
                 Text("\(settings.resolution.detail) Orientation and resolution apply the next time the game starts, and a game already "
                    + "running in this session needs Husk closed and opened again. Frame Handoff is for Unity 6 games: GPU skips a "
                    + "copy of every frame; CPU Copy is the slower way that works everywhere, if the picture is wrong with GPU.")
+            }
+
+            Section {
+                Toggle("Detailed Log", isOn: $settings.detailedLog)
+            } header: {
+                Text("Debugging")
+            } footer: {
+                Text("For a problem report: the next run's log also lists every file the game opens and every network call it makes "
+                   + "(Technical Details › Share Log). It makes the game slower and the log much longer, so turn it off again after.")
             }
 
             Section {

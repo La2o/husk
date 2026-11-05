@@ -1236,6 +1236,8 @@ bool tl_javaapp_start(const tl_javaapp_config *cfg)
     setenv("EXTERNAL_STORAGE", "/sdcard", 0); setenv("ANDROID_ASSETS", "/system/app", 0); setenv("BOOTCLASSPATH", "", 0);
     if (!tl_ld_add_apk(cfg->apk_path)) return false;
     if (!tl_dvm_add_apk(cfg->apk_path)) return false;
+    /* Play Games for the game's C#, signed in with the person's Google account (husk-tl-jni-gms.c, husk-tl-playgames.h) */
+    { void tl_gms_install_java(void); tl_gms_install_java(); }
     { char lib[1100]; snprintf(lib, sizeof(lib), "%s/lib", A.data); mkdir(lib, 0755); tl_ld_apk_libs(stub_lib, lib); }
     { pthread_attr_t rt; pthread_attr_init(&rt); pthread_attr_setstacksize(&rt, 64u << 20); A.gl_thread_started = pthread_create(&A.gl_thread, &rt, gl_main, NULL) == 0; }
     pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 256u << 20);

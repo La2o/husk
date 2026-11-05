@@ -59,6 +59,8 @@ When the online save does not find its player, or the game stops, these say why:
 - **Husk's own log** has the same steps under `pgs`.
 - **A crash:** the next launch shows the report, which now names native SIGTRAP and SIGBUS crashes. The release's
   `Husk.app.dSYM.zip` symbolicates an iOS `.ips` crash report of that build.
+- **Game Settings › Debugging › Detailed Log:** for one run, the log also lists every file the game opens (`file:`) and
+  every network call it makes (`net:`). It slows the game and makes the log long, so turn it off again afterwards.
 
 ## How the sign-in works
 
@@ -79,8 +81,18 @@ before. `requestServerSideAccess` (a code a game's own server trades with Google
 `oauth2:server:client_id:<the game's server client>:api_scope:…`.
 
 The runtime asks through `husk_pgs_set_host` (`src/translation-layer-next/husk-tl-playgames.h`). The game's C# reaches Play
-Games through JNI, and Husk's own answers in `husk-tl-jni-gms.c` come before the APK's Java, even on the Java runtime that
-runs Unity 6. They answer these calls:
+Games through JNI, and Husk's own answers in `husk-tl-jni-gms.c` come before the APK's Java. Unity 6 games such as ITRTG
+run on Husk's Java runtime, which runs the APK's own Play services client. That client finds no Play services to bind to
+(`unable to connect to service … connect.service.START`), so the Java runtime gets its own table, `tl_gms_install_java`.
+It holds only Play Games' entry points.
+
+On the Java runtime, Unity finds methods with Java reflection, which only sees classes in the APK. So the answers there are
+objects of the APK's own classes:
+
+- the Tasks are real ones from its `TaskCompletionSource`, so their listeners and `Tasks.whenAll` are the library's own;
+- the results are its `AuthenticationResult` and `PlayerEntity`, whose getters Husk answers.
+
+The Play Games Unity plugin's ProGuard rules keep all of these under their names. These calls are answered:
 
 - `GamesSignInClient.isAuthenticated` / `signIn` / `requestServerSideAccess` (both forms);
 - `PlayersClient.getCurrentPlayer` / `getCurrentPlayerId`, and the `Player` getters;
