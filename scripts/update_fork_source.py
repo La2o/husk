@@ -17,10 +17,11 @@ ICON = f"https://raw.githubusercontent.com/{REPO}/refs/heads/main/src/app/Husk/A
 IPA = "Husk.ipa"
 TAG = re.compile(r"fork-(\d+(?:\.\d+)*)-(\d+)")
 DESCRIPTION = (
-    "Husk (github.com/Leviidev/Husk) with this fork's changes on top: Google Play Games sign-in with your own Google "
-    "account, so games that save online under their Play Games player (Idling to Rule the Gods) find the same saves as "
-    "on Android; every game's saves copied to an iCloud Drive folder each time you leave Husk; and Unity 6 start-up and "
-    "frame fixes. Sign the IPA with your own certificate in Feather, AltStore or SideStore."
+    "Husk (github.com/Leviidev/Husk) with this fork's changes on top. Google Play Games signs in with your own Google "
+    "account (the one in Husk's Store), so games that save online under their Play Games player (Idling to Rule the Gods' "
+    "Save Online / Load Online) find the same saves as on Android; Unity 6 start-up and frame fixes. Every build of every "
+    "branch is listed: each says its branch, its commit and what changed, and test builds of other branches say so. "
+    "Sign the IPA with your own certificate in Feather, AltStore or SideStore."
 )
 
 
@@ -66,7 +67,7 @@ def generate(releases: list, source_url: str, base_build: str = "") -> dict:
             "name": "Husk",
             "bundleIdentifier": "com.husk.app",
             "developerName": "Leviidev (Husk), La2o (fork)",
-            "subtitle": "Android games on iPhone, with Play Games and iCloud saves.",
+            "subtitle": "Android games on iPhone, signed in to Play Games for online saves.",
             "localizedDescription": DESCRIPTION,
             "iconURL": ICON,
             "tintColor": "#5865F2",

@@ -1,26 +1,35 @@
 name: Husk IPA
 
-# Builds Husk with this fork's changes and publishes it for Feather, AltStore and SideStore.
+# Builds Husk with this fork's changes and publishes it for Feather, AltStore and SideStore: a test channel, where every build
+# of every branch is one tap away and says what it is.
 #
 # Husk's own native parts (QEMU, ANGLE, MoltenVK, the PS4 layer, the Java runtime) take hours and a Mac with the Android
 # images to build; they are taken as they are from the official release this fork is based on (HUSK_RUNTIME), and only the
-# app itself (Swift, the translation layer's C, the extensions) is compiled from this branch. Each run publishes a release
-# tagged fork-<HUSK_RUNTIME>-<run> with Husk.ipa, then rewrites the source (source.json on the release tagged "feed"), whose
-# address never changes:
+# app itself (Swift, the translation layer's C, the extensions) is compiled from the branch. Each run publishes a release
+# tagged fork-<HUSK_RUNTIME>-<run> with Husk.ipa and its debug symbols (Husk.app.dSYM.zip), with notes naming the branch,
+# the commit and the changes since the build before, then rewrites the source (source.json on the release tagged "feed"),
+# whose address never changes:
 #
 #   https://github.com/La2o/husk/releases/download/feed/source.json
+#
+# A push to any branch that has this file builds (builds of branches other than MAIN_LINE are marked as tests); so does
+# "Run workflow" on the Actions tab, for any branch, with a note of what to test.
 
 on:
   push:
     branches:
-      - main
-      - claude/amazing-cannon-7unlbw
+      - '**'
     paths:
       - 'src/**'
       - 'scripts/build_rppairing_ios.sh'
       - 'scripts/update_fork_source.py'
       - '.github/workflows/husk-ipa.yml'
   workflow_dispatch:
+    inputs:
+      notes:
+        description: What to test in this build (shown in Feather)
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -34,6 +43,8 @@ env:
   HUSK_RUNTIME: '3.4'
   # Its build number: this fork's builds are numbered after it (149.<run>), so an installed 3.4 is always older.
   HUSK_RUNTIME_BUILD: '149'
+  # The branch whose builds are the regular ones; any other branch's are marked as tests.
+  MAIN_LINE: claude/amazing-cannon-7unlbw
 
 jobs:
   build:
@@ -41,6 +52,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # the changes since the build before, for the notes
 
       - name: Toolchain
         run: |
@@ -143,24 +156,52 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Debug symbols
+        run: |
+          set -euo pipefail
+          DSYM="$RUNNER_TEMP/derived/Build/Products/Release-iphoneos/Husk.app.dSYM"
+          if [ -d "$DSYM" ]; then
+            ditto -c -k --keepParent "$DSYM" dist/Husk.app.dSYM.zip
+            dwarfdump --uuid "$DSYM" || true
+          else
+            echo "no dSYM was made"
+          fi
+
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ipa.outputs.version }}
+          NOTES: ${{ github.event.inputs.notes }}
         run: |
           set -euo pipefail
           TAG="fork-$HUSK_RUNTIME-$GITHUB_RUN_NUMBER"
+          BRANCH="$GITHUB_REF_NAME"
+          # the build before: the newest fork release, and the commit it was made from
+          PREV_TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '[.[] | select(.tag_name | startswith("fork-"))][0].tag_name // ""')
+          PREV_SHA=""
+          [ -n "$PREV_TAG" ] && PREV_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$PREV_TAG" --jq .sha 2>/dev/null || true)
           {
-            echo "Husk $HUSK_RUNTIME with this fork's changes, built from \`${GITHUB_SHA::10}\` on \`$GITHUB_REF_NAME\`."
+            echo "**$VERSION** (build $HUSK_RUNTIME_BUILD.$GITHUB_RUN_NUMBER) from \`$BRANCH\` at \`${GITHUB_SHA::7}\`, on Husk $HUSK_RUNTIME."
+            if [ "$BRANCH" != "$MAIN_LINE" ]; then echo; echo "Test build of the branch $BRANCH."; fi
+            if [ -n "${NOTES:-}" ]; then echo; echo "What to test: $NOTES"; fi
             echo
-            echo "- Google Play Games: games sign in with the Google account you sign in to Husk's Store with (your own, not the guest one). Idling to Rule the Gods' Save Online / Load Online use the same player as on Android."
-            echo "- iCloud Drive saves: choose a folder once on a game's page; each time you leave Husk with a game loaded, its saves are copied there (the last 10 kept)."
-            echo "- Unity 6: writable data no longer lands in JIT memory (start-up SIGBUS), and Idling to Rule the Gods hands frames to the screen on the GPU."
+            if [ -n "$PREV_SHA" ] && git merge-base --is-ancestor "$PREV_SHA" HEAD 2>/dev/null; then
+              echo "Changes since $PREV_TAG (\`${PREV_SHA::7}\`):"
+              git log -40 --no-merges --format='- %s (%h)' "$PREV_SHA..HEAD"
+            else
+              echo "Latest changes on $BRANCH:"
+              git log --no-merges --format='- %s (%h)' -15
+            fi
             echo
-            echo "Sign with your own certificate in Feather, AltStore or SideStore."
+            echo "To look into a problem: the game's page > Technical Details > Share Log (Play Games calls are the lines starting 'gms: Play Games', servers the game looks up the ones starting 'net:'), and Online Saves > Copy Sign-In Details. Settings shows the commit a build is from. Husk.app.dSYM.zip symbolicates an iOS crash report (.ips) of this build."
           } > "$RUNNER_TEMP/notes.md"
-          gh release create "$TAG" dist/Husk.ipa --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Husk $VERSION (fork)" --notes-file "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+          PRE=""
+          [ "$BRANCH" != "$MAIN_LINE" ] && PRE="--prerelease"
+          ASSETS=(dist/Husk.ipa)
+          [ -f dist/Husk.app.dSYM.zip ] && ASSETS+=(dist/Husk.app.dSYM.zip)
+          gh release create "$TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" $PRE \
+            --title "Husk $VERSION ($BRANCH)" --notes-file "$RUNNER_TEMP/notes.md"
           echo "IPA: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Husk.ipa"
 
       - name: Source for Feather / AltStore / SideStore

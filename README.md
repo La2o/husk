@@ -22,10 +22,10 @@
 </p>
 
 > **This fork** (La2o/husk) adds Google Play Games sign-in with your own Google account, so games that save online under
-> their Play Games player (Idling to Rule the Gods) find the same saves as on Android. It also copies every game's saves to
-> iCloud Drive automatically, and fixes Unity 6 start-up. Source for Feather, AltStore and SideStore:
+> their Play Games player (Idling to Rule the Gods) find the same saves as on Android. It also fixes Unity 6 start-up.
+> Its test channel for Feather, AltStore and SideStore lists every build of every branch with what changed:
 > `https://github.com/La2o/husk/releases/download/feed/source.json`. Details:
-> [docs/07-itrtg-and-cloud-saves.md](docs/07-itrtg-and-cloud-saves.md).
+> [docs/07-itrtg-online-saves.md](docs/07-itrtg-online-saves.md).
 
 Add an APK, tap it, and it opens full-screen.
 
