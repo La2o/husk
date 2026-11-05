@@ -6,7 +6,11 @@ This fork is Husk 3.4 (Leviidev/Husk, build 149) with two changes on top, made s
 1. **Google Play Games signs in with your own Google account.** The game's Save Online / Load Online then use the same player
    as on Android, so they reach the same saves on Shugasu's server.
 2. **Unity 6 fixes.** Unity's writable data no longer ends up in JIT memory, which made the game crash at start with SIGBUS.
-   ITRTG also hands each frame to the screen on the GPU instead of copying it through the CPU.
+   Unity's mimalloc allocator is turned off in favour of its Dynamic Heap allocator, because under Husk mimalloc handed out
+   memory still in use, and the loading threads crashed at start (`TL_UNITY_MIMALLOC=1` keeps mimalloc). ITRTG also hands
+   each frame to the screen on the GPU instead of copying it through the CPU.
+3. **Switching apps.** When you leave Husk, the game is paused, which makes it save. Husk now asks iOS for a few seconds of
+   background time so that save can finish before iOS suspends Husk, and possibly ends it later.
 
 ## Install, and the test channel
 
