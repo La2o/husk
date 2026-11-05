@@ -21,6 +21,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Leviidev/Husk?style=flat-square&color=5B49EB&labelColor=111111" alt="GPL-2.0-or-later"></a>
 </p>
 
+> **This fork** (La2o/husk) adds Google Play Games sign-in with your own Google account, so games that save online under
+> their Play Games player (Idling to Rule the Gods) find the same saves as on Android. It also copies every game's saves to
+> iCloud Drive automatically, and fixes Unity 6 start-up. Source for Feather, AltStore and SideStore:
+> `https://github.com/La2o/husk/releases/download/feed/source.json`. Details:
+> [docs/07-itrtg-and-cloud-saves.md](docs/07-itrtg-and-cloud-saves.md).
+
 Add an APK, tap it, and it opens full-screen.
 
 - **Translation layer** — the game’s own 64-bit Android code runs on the iPhone. Husk stands in for Android around it (C library, Java, GL, Vulkan, audio, input). No Android boot; a game starts in seconds.

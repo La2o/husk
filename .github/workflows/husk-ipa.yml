@@ -1,0 +1,185 @@
+name: Husk IPA
+
+# Builds Husk with this fork's changes and publishes it for Feather, AltStore and SideStore.
+#
+# Husk's own native parts (QEMU, ANGLE, MoltenVK, the PS4 layer, the Java runtime) take hours and a Mac with the Android
+# images to build; they are taken as they are from the official release this fork is based on (HUSK_RUNTIME), and only the
+# app itself (Swift, the translation layer's C, the extensions) is compiled from this branch. Each run publishes a release
+# tagged fork-<HUSK_RUNTIME>-<run> with Husk.ipa, then rewrites the source (source.json on the release tagged "feed"), whose
+# address never changes:
+#
+#   https://github.com/La2o/husk/releases/download/feed/source.json
+
+on:
+  push:
+    branches:
+      - main
+      - claude/amazing-cannon-7unlbw
+    paths:
+      - 'src/**'
+      - 'scripts/build_rppairing_ios.sh'
+      - 'scripts/update_fork_source.py'
+      - '.github/workflows/husk-ipa.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: husk-ipa
+  cancel-in-progress: false
+
+env:
+  # The official release whose native libraries and Java runtime go into the IPA: the release this branch's source is.
+  HUSK_RUNTIME: '3.4'
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          command -v xcodegen || brew install xcodegen
+
+      - name: Official Husk ${{ env.HUSK_RUNTIME }} runtime
+        run: |
+          set -euo pipefail
+          mkdir -p upstream/unpacked
+          curl -fL --retry 3 --retry-delay 5 "https://github.com/Leviidev/Husk/releases/download/$HUSK_RUNTIME/Husk.ipa" -o upstream/Husk.ipa
+          unzip -q upstream/Husk.ipa -d upstream/unpacked
+          APP=upstream/unpacked/Payload/Husk.app
+          for f in Husk Frameworks/libqemu-aarch64-softmmu.dylib Frameworks/libANGLE-shared.dylib Frameworks/libhuskps4.dylib \
+                   java-runtime/husk-framework.dex java-runtime/husk-framework-core.dex; do
+            test -e "$APP/$f" || { echo "the $HUSK_RUNTIME release has no $f"; exit 1; }
+          done
+          # what the project links and embeds, where it looks for it
+          mkdir -p build/ios-arm64/lib build/ios-arm64/sysroot/lib
+          cp "$APP/Frameworks/libqemu-aarch64-softmmu.dylib" "$APP/Frameworks/libhuskps4.dylib" build/ios-arm64/lib/
+          cp "$APP/Frameworks/libANGLE-shared.dylib" build/ios-arm64/sysroot/lib/
+
+      - name: On-device pairing library
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-apple-ios
+          ./scripts/build_rppairing_ios.sh
+          test -f build/ios-arm64/lib/libhusk_rppairing.a
+
+      - name: Project for the app only
+        run: |
+          set -euo pipefail
+          # MoltenVK and the staged guest/runtime files come from the official IPA (above), not from a local build.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("src/app/project.yml")
+          s = p.read_text()
+          dep = "      - framework: ../../build/ios-arm64/lib/MoltenVK.xcframework\n        embed: true\n        codeSign: true\n        link: false\n"
+          assert s.count(dep) == 1, "the MoltenVK dependency changed"
+          s = s.replace(dep, "")
+          a = s.index("    preBuildScripts:\n")
+          b = s.index("    postBuildScripts:\n", a)
+          p.write_text(s[:a] + s[b:])
+          PY
+          (cd src/app && xcodegen generate --quiet)
+
+      - name: Compile
+        run: |
+          set -euo pipefail
+          mkdir -p build/ci
+          if ! xcodebuild -project src/app/Husk.xcodeproj -scheme Husk -sdk iphoneos -configuration Release \
+               -derivedDataPath "$RUNNER_TEMP/derived" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+               build > build/ci/xcodebuild.log 2>&1; then
+            grep -nE 'error:|fatal error:|BUILD FAILED' build/ci/xcodebuild.log | tail -60 || true
+            tail -40 build/ci/xcodebuild.log
+            exit 1
+          fi
+          grep -cE ' warning: ' build/ci/xcodebuild.log || true
+          test -f "$RUNNER_TEMP/derived/Build/Products/Release-iphoneos/Husk.app/Husk"
+
+      - name: Assemble the IPA
+        id: ipa
+        run: |
+          set -euo pipefail
+          APP="$GITHUB_WORKSPACE/upstream/unpacked/Payload/Husk.app"
+          BUILT="$RUNNER_TEMP/derived/Build/Products/Release-iphoneos/Husk.app"
+          # this branch's executable and extensions in the official app (its resources are the same source's)
+          cp "$BUILT/Husk" "$APP/Husk"
+          for ext in "$BUILT"/PlugIns/*.appex; do
+            [ -d "$ext" ] || continue
+            rm -rf "$APP/PlugIns/$(basename "$ext")"
+            cp -R "$ext" "$APP/PlugIns/"
+          done
+          RUN="$GITHUB_RUN_NUMBER"
+          VERSION="$HUSK_RUNTIME.$RUN"
+          plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Info.plist"
+          plutil -replace CFBundleVersion -string "$RUN" "$APP/Info.plist"
+          plutil -replace HuskBuildCommit -string "$(git rev-parse --short HEAD)" "$APP/Info.plist"
+          plutil -replace HuskBuildDate -string "$(date -u '+%Y-%m-%d %H:%M UTC')" "$APP/Info.plist"
+          # ad hoc: Feather, AltStore and SideStore sign it again with the person's own certificate
+          find "$APP" -name '*.dylib' -not -path '*/Frameworks/*.framework/*' -print0 | while IFS= read -r -d '' d; do
+            codesign --force --sign - --timestamp=none "$d"
+          done
+          for fw in "$APP"/Frameworks/*.framework; do [ -d "$fw" ] && codesign --force --sign - --timestamp=none "$fw"; done
+          for ext in "$APP"/PlugIns/*.appex; do [ -d "$ext" ] && codesign --force --sign - --timestamp=none "$ext"; done
+          codesign --force --sign - --timestamp=none --entitlements src/app/Husk/Husk.entitlements "$APP"
+          codesign --verify --strict "$APP"
+          mkdir -p dist
+          (cd upstream/unpacked && zip -qry "$GITHUB_WORKSPACE/dist/Husk.ipa" Payload)
+          unzip -tq dist/Husk.ipa
+          ls -lh dist/Husk.ipa
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the IPA with the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: Husk-${{ steps.ipa.outputs.version }}
+          path: dist/Husk.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ipa.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="fork-$HUSK_RUNTIME-$GITHUB_RUN_NUMBER"
+          {
+            echo "Husk $HUSK_RUNTIME with this fork's changes, built from \`${GITHUB_SHA::10}\` on \`$GITHUB_REF_NAME\`."
+            echo
+            echo "- Google Play Games: games sign in with the Google account you sign in to Husk's Store with (your own, not the guest one). Idling to Rule the Gods' Save Online / Load Online use the same player as on Android."
+            echo "- iCloud Drive saves: choose a folder once on a game's page; each time you leave Husk with a game loaded, its saves are copied there (the last 10 kept)."
+            echo "- Unity 6: writable data no longer lands in JIT memory (start-up SIGBUS), and Idling to Rule the Gods hands frames to the screen on the GPU."
+            echo
+            echo "Sign with your own certificate in Feather, AltStore or SideStore."
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" dist/Husk.ipa --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Husk $VERSION (fork)" --notes-file "$RUNNER_TEMP/notes.md"
+          echo "IPA: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Husk.ipa"
+
+      - name: Source for Feather / AltStore / SideStore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/feed/source.json"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          python3 scripts/update_fork_source.py "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/source.json" "$URL"
+          gh release view feed --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create feed --repo "$GITHUB_REPOSITORY" --title "Source for Feather, AltStore and SideStore" \
+              --notes "Add this source: $URL" --latest=false
+          gh release upload feed "$RUNNER_TEMP/source.json" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Source: $URL"
+
+      - name: Compiler log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log-${{ github.run_number }}
+          path: build/ci/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 7
