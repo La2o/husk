@@ -154,16 +154,22 @@ enum ICloudSaves {
               SaveBackup.hasData(app) else { return }
         // Not more than once a minute: switching apps back and forth should not fill the folder.
         if let last = lastBackup(app), Date().timeIntervalSince(last) < 60 { return }
-        // Time to finish once the screen is off; ended on the main thread, once, whichever comes first.
-        final class Grace { var id: UIBackgroundTaskIdentifier = .invalid
-            func end() { if id != .invalid { UIApplication.shared.endBackgroundTask(id); id = .invalid } } }
-        let grace = Grace()
-        grace.id = UIApplication.shared.beginBackgroundTask(withName: "Husk iCloud saves") { grace.end() }
+        // Time to finish once the screen is off: ended once, whichever comes first.
+        if grace == .invalid {
+            grace = UIApplication.shared.beginBackgroundTask(withName: "Husk iCloud saves") {
+                MainActor.assumeIsolated { endGrace() }
+            }
+        }
         // The game has just been paused, and Unity writes its preferences as it pauses: a moment for that first.
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.5) {
             do { try backUp(app) } catch { HuskLog.log("saves", "\(app.label): iCloud Drive backup (\(reason)) failed: \(error.localizedDescription)") }
-            DispatchQueue.main.async { grace.end() }
+            Task { @MainActor in endGrace() }
         }
+    }
+
+    @MainActor private static var grace: UIBackgroundTaskIdentifier = .invalid
+    @MainActor private static func endGrace() {
+        if grace != .invalid { UIApplication.shared.endBackgroundTask(grace); grace = .invalid }
     }
 }
 
