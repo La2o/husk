@@ -130,6 +130,15 @@ static bool current_player(bool interactive, tl_pgs_player *out)
     pthread_mutex_unlock(&g_player_lock);
     return ok;
 }
+/* Every Play Games call the game makes, and its answer, in the game's log: what to look at when an online save does not find
+ * its player. The first 40 calls and then every 50th, so a game that polls does not fill the log. */
+static void pgs_trace(const char *call, const char *answer)
+{
+    static _Atomic int n;
+    int k = n++;
+    if (k < 40 || k % 50 == 0) tl_log_line("gms: Play Games %s -> %s", call, answer);
+}
+
 /* Whether the player is in, from what has been asked already: never asks (a game that never signs in is not held up). */
 static bool signed_in_now(void)
 {
@@ -224,15 +233,17 @@ static void PG_leaderboards(tl_jcall *c) { c->ret = vl(singleton("com/google/and
 static void PG_players(tl_jcall *c) { c->ret = vl(singleton("com/google/android/gms/games/PlayersClient")); }
 static void PG_events(tl_jcall *c) { c->ret = vl(singleton("com/google/android/gms/games/EventsClient")); }
 static void PG_snapshots(tl_jcall *c) { c->ret = vl(singleton("com/google/android/gms/games/SnapshotsClient")); }
-static void PG_initialize(tl_jcall *c) { (void)c; once("Play Games initialised"); }
+static void PG_initialize(tl_jcall *c) { (void)c; once("Play Games initialised"); pgs_trace("PlayGamesSdk.initialize", "done"); }
 
 /* isAuthenticated (the quiet check at start) / signIn (a button): finished, successfully, saying whether the player is in --
  * as Play services answers, signed out included. */
 static void sign_in(tl_jcall *c, bool interactive)
 {
     jobj *r = tl_jni_new_object(tl_jni_class(HAUTH));
-    tl_jni_set_field(r, "authenticated", "Z", vz(current_player(interactive, NULL)));
+    bool in = current_player(interactive, NULL);
+    tl_jni_set_field(r, "authenticated", "Z", vz(in));
     c->ret = vl(task_done(r, NULL));
+    pgs_trace(interactive ? "GamesSignInClient.signIn" : "GamesSignInClient.isAuthenticated", in ? "authenticated" : "not authenticated");
 }
 static void SignIn_check(tl_jcall *c) { sign_in(c, false); }
 static void SignIn_signIn(tl_jcall *c) { sign_in(c, true); }
@@ -253,14 +264,19 @@ static jobj *player_object(const tl_pgs_player *p)
 static void PC_currentPlayer(tl_jcall *c)
 {
     tl_pgs_player p;
-    c->ret = vl(current_player(false, &p) ? task_done(player_object(&p), NULL) : task_failed());
+    bool in = current_player(false, &p);
+    c->ret = vl(in ? task_done(player_object(&p), NULL) : task_failed());
+    pgs_trace("PlayersClient.getCurrentPlayer", in ? p.id : "failed: SIGN_IN_REQUIRED");
 }
 static void PC_currentPlayerId(tl_jcall *c)
 {
     tl_pgs_player p;
-    c->ret = vl(current_player(false, &p) ? task_done(tl_jni_new_string(p.id), NULL) : task_failed());
+    bool in = current_player(false, &p);
+    c->ret = vl(in ? task_done(tl_jni_new_string(p.id), NULL) : task_failed());
+    pgs_trace("PlayersClient.getCurrentPlayerId", in ? p.id : "failed: SIGN_IN_REQUIRED");
 }
-#define PLAYER_STR(nm, field) static void nm(tl_jcall *c) { c->ret = tl_jni_get_field(c->self, field, "Ljava/lang/String;"); }
+#define PLAYER_STR(nm, field) static void nm(tl_jcall *c) \
+    { c->ret = tl_jni_get_field(c->self, field, "Ljava/lang/String;"); pgs_trace("Player." field, tl_jni_string(c->ret.l) ? tl_jni_string(c->ret.l) : "null"); }
 PLAYER_STR(Player_id, "playerId")
 PLAYER_STR(Player_name, "displayName")
 PLAYER_STR(Player_icon, "iconImageUrl")
@@ -273,12 +289,15 @@ static void Player_hasHiRes(tl_jcall *c) { c->ret = vz(tl_jni_get_field(c->self,
 static void SignIn_serverAccess(tl_jcall *c)
 {
     const char *client = tl_jni_string(c->args[0].l);
-    if (!client || !current_player(false, NULL)) { c->ret = vl(task_failed()); return; }
+    if (!client || !current_player(false, NULL)) { c->ret = vl(task_failed()); pgs_trace("GamesSignInClient.requestServerSideAccess", "failed: SIGN_IN_REQUIRED"); return; }
     char *code = tl_pgs_ask("servercode", client, "", c->args[1].z);
-    if (code && code[0] && code[0] != '!') c->ret = vl(task_done(tl_jni_new_string(code), NULL));
-    else {
+    if (code && code[0] && code[0] != '!') {
+        c->ret = vl(task_done(tl_jni_new_string(code), NULL));
+        pgs_trace("GamesSignInClient.requestServerSideAccess", "a server auth code");      /* never the code itself */
+    } else {
         char why[300]; snprintf(why, sizeof(why), "8: INTERNAL_ERROR (%s)", code && code[0] == '!' ? code + 1 : "no server auth code");
         c->ret = vl(task_done(NULL, why));
+        pgs_trace("GamesSignInClient.requestServerSideAccess", why);
     }
     free(code);
 }
@@ -290,7 +309,7 @@ static void SignIn_serverAccessScopes(tl_jcall *c)
 {
     const char *client = tl_jni_string(c->args[0].l);
     jobj *list = c->args[2].l;
-    if (!client || !current_player(false, NULL)) { c->ret = vl(task_failed()); return; }
+    if (!client || !current_player(false, NULL)) { c->ret = vl(task_failed()); pgs_trace("GamesSignInClient.requestServerSideAccess(scopes)", "failed: SIGN_IN_REQUIRED"); return; }
     char scopes[200] = "";
     int n = list ? tl_jni_call(list, "size", "()I", NULL).i : 0;
     if (tl_jni_pending()) { tl_jni_clear(); n = 0; }
@@ -308,9 +327,11 @@ static void SignIn_serverAccessScopes(tl_jcall *c)
         tl_jni_set_field(r, "authCode", "Ljava/lang/String;", vl(tl_jni_new_string(code)));
         tl_jni_set_field(r, "grantedScopes", "Ljava/util/List;", vl(list));
         c->ret = vl(task_done(r, NULL));
+        pgs_trace("GamesSignInClient.requestServerSideAccess(scopes)", scopes[0] ? scopes : "a server auth code");
     } else {
         char why[300]; snprintf(why, sizeof(why), "8: INTERNAL_ERROR (%s)", code && code[0] == '!' ? code + 1 : "no server auth code");
         c->ret = vl(task_done(NULL, why));
+        pgs_trace("GamesSignInClient.requestServerSideAccess(scopes)", why);
     }
     free(code);
 }
@@ -319,7 +340,12 @@ static void AuthResp_scopes(tl_jcall *c) { c->ret = tl_jni_get_field(c->self, "g
 
 /* Tasks.whenAll: the Tasks here have finished already. The list's own contents are not kept on this side (Husk's C lists are
  * empty), and the one a game waits on at sign-in is getCurrentPlayer's, so it has succeeded when the player is in. */
-static void Tasks_whenAll(tl_jcall *c) { c->ret = vl(current_player(false, NULL) ? task_done(NULL, NULL) : task_failed()); }
+static void Tasks_whenAll(tl_jcall *c)
+{
+    bool in = current_player(false, NULL);
+    c->ret = vl(in ? task_done(NULL, NULL) : task_failed());
+    pgs_trace("Tasks.whenAll", in ? "succeeded" : "failed: SIGN_IN_REQUIRED");
+}
 static void Tasks_forResult(tl_jcall *c) { c->ret = vl(task_done(c->args[0].l, NULL)); }
 
 /* ----------------------------------------------------------------- Billing */

@@ -85,6 +85,36 @@ enum PlayGamesSignIn {
         return !s.isAnonymous && !s.aasToken.isEmpty
     }
 
+    /// The player this account last signed in as in this game, on this iPhone (kept for offline starts and for the game's page).
+    static func lastPlayer(package: String?) -> Player? {
+        guard let s = account(), let package,
+              let data = UserDefaults.standard.data(forKey: cacheKey(s.email, package)) else { return nil }
+        return try? JSONDecoder().decode(Player.self, from: data)
+    }
+
+    /// Why the last sign-in for this game failed, if it did (cleared by one that works).
+    static func lastFailure(package: String?) -> String? {
+        package.flatMap { UserDefaults.standard.string(forKey: "husk.pgs.failure.\($0)") }
+    }
+
+    /// What to send when the game's online save does not find its player: the account, the game and the certificate digest
+    /// Google was asked with, and the last answer. No tokens.
+    static func details(_ app: TLApp) -> String {
+        let s = account()
+        let digest: String
+        switch certificateDigest(apk: app.apks.first) { case .success(let d): digest = d; case .failure(let e): digest = e.errorDescription ?? "?" }
+        let player = lastPlayer(package: app.packageName)
+        let info = Bundle.main.infoDictionary
+        return [
+            "Husk \(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"), \(info?["HuskBuildCommit"] as? String ?? "?"))",
+            "Game: \(app.label) \(app.packageName ?? "?")",
+            "APK certificate SHA-1: \(digest)",
+            "Google account: \(s.map { $0.isAnonymous ? "Aurora guest (cannot sign in to Play Games)" : $0.email } ?? "none")",
+            "Play Games player: \(player.map { "\($0.name) (\($0.id))" } ?? "none yet")",
+            "Last sign-in error: \(lastFailure(package: app.packageName) ?? "none")",
+        ].joined(separator: "\n")
+    }
+
     /// Games known to keep their progress on their own server under the Play Games player: playing them signed out starts over.
     static let onlineSaveGames: Set<String> = ["de.shugasu.itrtg"]
     static func savesOnline(_ app: TLApp) -> Bool { app.packageName.map(onlineSaveGames.contains) ?? false }
@@ -156,6 +186,7 @@ enum PlayGamesSignIn {
         case .success(let p):
             state.lock.lock(); state.players[key] = p; state.lock.unlock()
             if let data = try? JSONEncoder().encode(p) { UserDefaults.standard.set(data, forKey: key) }
+            UserDefaults.standard.removeObject(forKey: "husk.pgs.failure.\(t.package)")
             HuskLog.log("pgs", "\(t.package): signed in to Play Games as \(p.name) (player \(p.id))")
             return .success(p)
         case .failure(let e):
@@ -166,6 +197,7 @@ enum PlayGamesSignIn {
                 return .success(p)
             }
             HuskLog.log("pgs", "\(t.package): Play Games sign-in failed: \(e.errorDescription ?? "?")")
+            UserDefaults.standard.set("\(Date().formatted(date: .abbreviated, time: .standard)): \(e.errorDescription ?? "?")", forKey: "husk.pgs.failure.\(t.package)")
             return .failure(e)
         }
     }

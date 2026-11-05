@@ -138,17 +138,15 @@ struct GamePage: View {
     @State private var savesBusy = false
     @State private var savesMessage: String?
     @State private var confirmRestore: URL?
-    /// The iCloud Drive backup confirmRestore is a downloaded copy of: its name, and the copy is removed after
-    @State private var cloudRestoreName: String?
     @State private var reporting: CompatSubject?
     /// JIT-less mode converting and signing this game's libraries before it starts
     @State private var preparing: String?
     @State private var prepareFailed: String?
     @State private var confirmQuit = false
     /// Sign in with Google first, for a game that saves online with Play Games (asked once per run of Husk)
-    @State private var confirmCloudSignIn = false
-    @State private var cloudSignIn = false
-    @State private var askedCloudSignIn = false
+    @State private var confirmOnlineSignIn = false
+    @State private var onlineSignIn = false
+    @State private var askedOnlineSignIn = false
 
     private var runs: Bool { app.report?.canRun == true }
 
@@ -245,10 +243,7 @@ struct GamePage: View {
                     else { Text("A backup is a .zip of everything \(app.label) has saved in Husk, to keep in Files or move to another device.") }
                 }
 
-                CloudSavesSection(app: app, loadedNow: loadedNow) { file, name in
-                    cloudRestoreName = name
-                    confirmRestore = file
-                }
+                OnlineSavesSection(app: app)
             }
 
             Section("About") {
@@ -298,13 +293,13 @@ struct GamePage: View {
         } message: {
             Text(prepareFailed ?? "")
         }
-        .confirmationDialog("Sign in with Google for online saves?", isPresented: $confirmCloudSignIn, titleVisibility: .visible) {
-            Button("Sign In with Google") { cloudSignIn = true }
+        .confirmationDialog("Sign in with Google for online saves?", isPresented: $confirmOnlineSignIn, titleVisibility: .visible) {
+            Button("Sign In with Google") { onlineSignIn = true }
             Button("Play Without Online Saves") { play() }
         } message: {
             Text("\(app.label) keeps its online saves under your Google Play Games player. Sign in with the Google account you play it with on Android, and the game's Load Online finds your progress.")
         }
-        .sheet(isPresented: $cloudSignIn) { GoogleSignInSheet() }
+        .sheet(isPresented: $onlineSignIn) { GoogleSignInSheet() }
         .confirmationDialog("Close Husk?", isPresented: $confirmQuit, titleVisibility: .visible) {
             Button("Close Husk") {
                 Router.shared.switchTo(app.id)
@@ -329,9 +324,9 @@ struct GamePage: View {
     private func play() {
         // A game whose progress lives on its own server under its Play Games player: without a Google account it would start
         // a new game, and its online save could then be overwritten. Asked once per run of Husk.
-        if PlayGamesSignIn.savesOnline(app), !PlayGamesSignIn.hasGoogleAccount, !askedCloudSignIn {
-            askedCloudSignIn = true
-            confirmCloudSignIn = true
+        if PlayGamesSignIn.savesOnline(app), !PlayGamesSignIn.hasGoogleAccount, !askedOnlineSignIn {
+            askedOnlineSignIn = true
+            confirmOnlineSignIn = true
             return
         }
         if JITLess.enabled, SigningCertificate.credentials() != nil, preparing == nil {
@@ -413,7 +408,6 @@ struct GamePage: View {
     }
 
     private func pickRestore() {
-        cloudRestoreName = nil
         HuskFilePicker.present(types: [.zip], multiple: false) { urls in
             if let url = urls.first { confirmRestore = url }
         } onFail: { savesMessage = $0 }
@@ -422,15 +416,12 @@ struct GamePage: View {
     private func restore(_ url: URL) {
         savesBusy = true; savesMessage = nil
         let app = self.app
-        let cloudName = cloudRestoreName
-        cloudRestoreName = nil
         Task.detached {
             let result = Result { try SaveBackup.restore(app, from: url) }
-            if cloudName != nil { try? FileManager.default.removeItem(at: url) }      // the copy downloaded from iCloud Drive
             await MainActor.run {
                 savesBusy = false
                 switch result {
-                case .success(let n): savesMessage = "Restored \(n) file\(n == 1 ? "" : "s") from \(cloudName ?? url.lastPathComponent)."
+                case .success(let n): savesMessage = "Restored \(n) file\(n == 1 ? "" : "s") from \(url.lastPathComponent)."
                 case .failure(let e): savesMessage = e.localizedDescription
                 }
             }
