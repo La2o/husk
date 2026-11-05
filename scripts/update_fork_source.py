@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""update_fork_source.py releases.json out.json SOURCE_URL -- the fork's AltStore / Feather source, from its GitHub releases.
+"""update_fork_source.py releases.json out.json SOURCE_URL [BASE_BUILD] -- the fork's AltStore / Feather source, from its releases.
 
 Every release the IPA workflow (.github/workflows/husk-ipa.yml) publishes is tagged fork-<Husk version>-<run> and carries
 Husk.ipa. The source lists them newest first, so Feather, AltStore and SideStore offer the latest and keep the older ones a
@@ -24,7 +24,7 @@ DESCRIPTION = (
 )
 
 
-def generate(releases: list, source_url: str) -> dict:
+def generate(releases: list, source_url: str, base_build: str = "") -> dict:
     versions, seen = [], set()
     for r in releases:
         m = TAG.fullmatch(r.get("tag_name", ""))
@@ -41,14 +41,17 @@ def generate(releases: list, source_url: str) -> dict:
         date = r.get("published_at") or r.get("created_at") or datetime.now(timezone.utc).isoformat()
         versions.append({
             "version": f"{base}.{run}",
-            "buildVersion": str(run),
+            "buildVersion": f"{base_build}.{run}" if base_build else str(run),
+            "run": run,
             "date": date,
             "localizedDescription": (r.get("body") or "").strip()[:4000],
             "downloadURL": assets[0]["browser_download_url"],
             "size": assets[0]["size"],
             "minOSVersion": "15.5",
         })
-    versions.sort(key=lambda v: int(v["buildVersion"]), reverse=True)
+    versions.sort(key=lambda v: v["run"], reverse=True)
+    for v in versions:
+        del v["run"]
     if not versions:
         raise SystemExit("no published fork-<version>-<run> release with Husk.ipa")
     latest = versions[0]
@@ -93,9 +96,9 @@ def read_pages(text: str) -> list:
 
 
 def main() -> None:
-    if len(sys.argv) != 4:
+    if len(sys.argv) not in (4, 5):
         raise SystemExit(__doc__)
-    doc = generate(read_pages(Path(sys.argv[1]).read_text()), sys.argv[3])
+    doc = generate(read_pages(Path(sys.argv[1]).read_text()), sys.argv[3], sys.argv[4] if len(sys.argv) == 5 else "")
     Path(sys.argv[2]).write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
     app = doc["apps"][0]
     print(f"source {sys.argv[3]}: latest {app['version']}, {len(app['versions'])} build(s)")

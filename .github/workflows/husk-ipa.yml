@@ -32,6 +32,8 @@ concurrency:
 env:
   # The official release whose native libraries and Java runtime go into the IPA: the release this branch's source is.
   HUSK_RUNTIME: '3.4'
+  # Its build number: this fork's builds are numbered after it (149.<run>), so an installed 3.4 is always older.
+  HUSK_RUNTIME_BUILD: '149'
 
 jobs:
   build:
@@ -116,7 +118,7 @@ jobs:
           RUN="$GITHUB_RUN_NUMBER"
           VERSION="$HUSK_RUNTIME.$RUN"
           plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Info.plist"
-          plutil -replace CFBundleVersion -string "$RUN" "$APP/Info.plist"
+          plutil -replace CFBundleVersion -string "$HUSK_RUNTIME_BUILD.$RUN" "$APP/Info.plist"
           plutil -replace HuskBuildCommit -string "$(git rev-parse --short HEAD)" "$APP/Info.plist"
           plutil -replace HuskBuildDate -string "$(date -u '+%Y-%m-%d %H:%M UTC')" "$APP/Info.plist"
           # ad hoc: Feather, AltStore and SideStore sign it again with the person's own certificate
@@ -168,7 +170,7 @@ jobs:
           set -euo pipefail
           URL="https://github.com/$GITHUB_REPOSITORY/releases/download/feed/source.json"
           gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
-          python3 scripts/update_fork_source.py "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/source.json" "$URL"
+          python3 scripts/update_fork_source.py "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/source.json" "$URL" "$HUSK_RUNTIME_BUILD"
           gh release view feed --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create feed --repo "$GITHUB_REPOSITORY" --title "Source for Feather, AltStore and SideStore" \
               --notes "Add this source: $URL" --latest=false
