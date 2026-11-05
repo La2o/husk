@@ -130,6 +130,14 @@ static bool current_player(bool interactive, tl_pgs_player *out)
     pthread_mutex_unlock(&g_player_lock);
     return ok;
 }
+/* Whether the player is in, from what has been asked already: never asks (a game that never signs in is not held up). */
+static bool signed_in_now(void)
+{
+    if (pthread_mutex_trylock(&g_player_lock) != 0) return false;      /* a sign-in under way: not in yet */
+    bool ok = g_player_asked && g_player_ok;
+    pthread_mutex_unlock(&g_player_lock);
+    return ok;
+}
 
 /* ------------------------------------------------------------------ Tasks */
 
@@ -229,7 +237,7 @@ static void sign_in(tl_jcall *c, bool interactive)
 static void SignIn_check(tl_jcall *c) { sign_in(c, false); }
 static void SignIn_signIn(tl_jcall *c) { sign_in(c, true); }
 static void Auth_isAuthenticated(tl_jcall *c) { c->ret = tl_jni_get_field(c->self, "authenticated", "Z"); }
-static void Task_failed(tl_jcall *c) { c->ret = vl(current_player(false, NULL) ? task_unavailable() : task_failed()); }
+static void Task_failed(tl_jcall *c) { c->ret = vl(signed_in_now() ? task_unavailable() : task_failed()); }
 
 #define PLAYER "com/google/android/gms/games/Player"
 static jobj *player_object(const tl_pgs_player *p)
