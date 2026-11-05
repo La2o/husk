@@ -21,7 +21,7 @@ published as a release tagged `fork-3.4-<run>` and added to the source:
 - **Its version is 3.4.<run>** (build 149.<run>), so it is always newer than the Husk 3.4 it replaces, and newer than the
   build before it.
 - **Its description in Feather** says which branch and commit it is from, what to test, and the commits since the build
-  before. Builds of branches other than `claude/amazing-cannon-7unlbw` are marked as test builds.
+  before. Builds of branches other than `main` are marked as test builds.
 - **The release also carries `Husk.app.dSYM.zip`**, the debug symbols of that exact binary, for symbolicating an iOS crash
   report (`.ips`).
 - **Husk's Settings and every log show the commit** a running build is from, so a log can be matched to its build.

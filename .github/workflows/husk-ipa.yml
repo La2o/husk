@@ -44,7 +44,7 @@ env:
   # Its build number: this fork's builds are numbered after it (149.<run>), so an installed 3.4 is always older.
   HUSK_RUNTIME_BUILD: '149'
   # The branch whose builds are the regular ones; any other branch's are marked as tests.
-  MAIN_LINE: claude/amazing-cannon-7unlbw
+  MAIN_LINE: main
 
 jobs:
   build:
