@@ -347,28 +347,17 @@ static void *b_AAssetManager_open(void *mgr, const char *name, int mode)
             tl_log_line("assets: %s: %s", name, err);
             return NULL;
         }
-        /* Unity 6's Mimalloc is off, and Unity's Dynamic Heap allocator (every Unity before 6, and Unity 6 when told) used instead.
-         * Under AOT its arena trim munmaps huge reservations that can overlap dylibs; with JIT it handed out memory still in use:
-         * Idling to Rule the Gods' loading threads (Loading.PreloadManager and Loading.AsyncRead together) died on pointers that
-         * held old data -- once the bytes of a path. TL_UNITY_MIMALLOC=1 keeps it on, to compare. */
-        const char *mm = getenv("TL_UNITY_MIMALLOC");
-        if (name && strstr(name, "boot.config") && (getenv("TL_NO_XMEM") || !mm || mm[0] != '1')) {
-            static const char key[] = "memorysetup-main-allocator-mimalloc-enabled=";
-            uint8_t *on = memmem(data, n, key, sizeof(key) - 1);
-            if (on && (size_t)(on - data) + sizeof(key) - 1 < n && on[sizeof(key) - 1] == '0') {
-                /* already off */
-            } else {
-                static const char extra[] = "\nmemorysetup-main-allocator-mimalloc-enabled=0\n";
-                uint8_t *b = malloc(n + sizeof(extra));
-                if (b) {
-                    memcpy(b, data, n);
-                    size_t bn = n;
-                    if (on && (size_t)(on - data) + sizeof(key) - 1 < n) b[(on - data) + sizeof(key) - 1] = '0';     /* =1 in place */
-                    else { memcpy(b + n, extra, sizeof(extra) - 1); bn += sizeof(extra) - 1; }
-                    if (owned) free((void *)data);
-                    data = b; n = bn; owned = true;
-                    tl_log_line("unity: boot.config: Mimalloc disabled (Unity's Dynamic Heap allocator instead)");
-                }
+        /* Unity 6's Mimalloc aborts under AOT: its arena trim munmaps huge reservations that
+         * can overlap dylibs. The Dynamic Heap allocator does not. */
+        if (getenv("TL_NO_XMEM") && name && strstr(name, "boot.config")
+            && !memmem(data, n, "memorysetup-main-allocator-mimalloc-enabled=0", 45)) {
+            static const char extra[] = "\nmemorysetup-main-allocator-mimalloc-enabled=0\n";
+            uint8_t *b = malloc(n + sizeof(extra));
+            if (b) {
+                memcpy(b, data, n); memcpy(b + n, extra, sizeof(extra) - 1);
+                if (owned) free((void *)data);
+                data = b; n += sizeof(extra) - 1; owned = true;
+                tl_log_line("unity: boot.config: Mimalloc disabled (JIT-less)");
             }
         }
         tl_asset *a = calloc(1, sizeof(*a));

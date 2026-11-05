@@ -6,9 +6,12 @@ This fork is Husk 3.4 (Leviidev/Husk, build 149) with two changes on top, made s
 1. **Google Play Games signs in with your own Google account.** The game's Save Online / Load Online then use the same player
    as on Android, so they reach the same saves on Shugasu's server.
 2. **Unity 6 fixes.** Unity's writable data no longer ends up in JIT memory, which made the game crash at start with SIGBUS.
-   Unity's mimalloc allocator is turned off in favour of its Dynamic Heap allocator, because under Husk mimalloc handed out
-   memory still in use, and the loading threads crashed at start (`TL_UNITY_MIMALLOC=1` keeps mimalloc). ITRTG also hands
-   each frame to the screen on the GPU instead of copying it through the CPU.
+   Unity 6 runs its memory on mimalloc, which tells threads apart by the thread pointer register. Husk gives that register
+   one value for all of a library's threads, so mimalloc took every thread for the same one and handed out memory still in
+   use: crashes at start in the loading threads, and later in a job worker. A Unity whose engine has mimalloc is now started
+   with `-systemallocator`, so its memory comes from the system's malloc (`TL_UNITY_SYSTEM_ALLOCATOR=0` keeps Unity's own
+   allocators). Unity reads boot.config straight out of the APK, so the setting there could not be changed on the way.
+   ITRTG also hands each frame to the screen on the GPU instead of copying it through the CPU.
 3. **Switching apps.** When you leave Husk, the game is paused, which makes it save. Husk now asks iOS for a few seconds of
    background time so that save can finish before iOS suspends Husk, and possibly ends it later.
 
@@ -57,6 +60,7 @@ When the online save does not find its player, or the game stops, these say why:
     `requestServerSideAccess`, only the fact that a code was issued is logged, never the code.
   - `net: the game looks up <host>` lines show each server the game contacts, once each. If the save server never appears,
     the game never tried to reach it. `-- not found` means the name did not resolve.
+  - `unity: command line "-systemallocator"` says the player was started with the system's malloc for its memory.
 - **Online Saves › Copy Sign-In Details.** This copies the build, the game, the SHA-1 of the APK's signing certificate, the
   Google account, the player and the last sign-in error. It includes no passwords and no tokens. The certificate SHA-1 should
   match the one Google Play lists for the game; an APK re-signed by someone else will not sign in.
@@ -64,7 +68,8 @@ When the online save does not find its player, or the game stops, these say why:
 - **A crash:** the next launch shows the report, which now names native SIGTRAP and SIGBUS crashes. The release's
   `Husk.app.dSYM.zip` symbolicates an iOS `.ips` crash report of that build.
 - **Game Settings › Debugging › Detailed Log:** for one run, the log also lists every file the game opens (`file:`) and
-  every network call it makes (`net:`). It slows the game and makes the log long, so turn it off again afterwards.
+  every network call it makes (`net:`). A file under `/proc` or `/sys` is listed once, however often the game reads it.
+  It slows the game and makes the log long, so turn it off again afterwards.
 
 ## How the sign-in works
 

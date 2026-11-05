@@ -759,11 +759,36 @@ static int b_mknodat(int dirfd, const char *p, unsigned mode, unsigned long dev)
 }
 static int b_mkfifoat(int dirfd, const char *p, unsigned mode) { return b_mknodat(dirfd, p, (mode & 0777) | 0010000, 0); }
 /* TL_FILE_TRACE also says what is asked of the file system without opening anything: which paths a game probes for, and whether they are there. */
+/*
+ * Whether the file trace shows this path: every path once, and paths outside /proc and /sys every time. Unity polls each core's
+ * cpu_capacity and cpufreq/cpuinfo_max_freq several times a second for as long as it runs (none of them exist here), which
+ * buried the rest of a Detailed Log under thousands of lines.
+ */
+bool tl_file_trace_shows(const char *path)
+{
+    if (!path || (strncmp(path, "/proc/", 6) && strncmp(path, "/sys/", 5))) return true;
+    static uint64_t seen[2048];
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    uint64_t h = 1469598103934665603ull;
+    for (const char *c = path; *c; c++) h = (h ^ (uint8_t)*c) * 1099511628211ull;
+    if (!h) h = 1;
+    bool shown = true;
+    pthread_mutex_lock(&lock);
+    for (size_t i = h % 2048, k = 0; k < 2048; i = (i + 1) % 2048, k++) {
+        if (seen[i] == h) { shown = false; break; }
+        if (!seen[i]) { seen[i] = h; break; }
+    }
+    pthread_mutex_unlock(&lock);
+    return shown;
+}
+
 static void ftrace(const char *what, const char *path, int r, int e)
 {
     static int tr = -1;
     if (tr < 0) tr = getenv("TL_FILE_TRACE") ? atoi(getenv("TL_FILE_TRACE")) : 0;
-    if (tr) tl_log_line("file: %s(%s) -> %d%s", what, path ? path : "(null)", r, r < 0 ? (e == ENOENT ? " ENOENT" : " error") : "");
+    if (tr && tl_file_trace_shows(path))
+        tl_log_line("file: %s(%s) -> %d%s%s", what, path ? path : "(null)", r, r < 0 ? (e == ENOENT ? " ENOENT" : " error") : "",
+                    path && (!strncmp(path, "/proc/", 6) || !strncmp(path, "/sys/", 5)) ? " (shown once)" : "");
 }
 static int b_access(const char *p, int m) { char b[1024]; jar_entry jar; if (jar_lookup(p, &jar)) { if (!jar.found) { tl_set_guest_errno(2); return -1; } if (m & 2) { tl_set_guest_errno(13); return -1; } return 0; } if (vfile_find(p)) { if (m & 2) { tl_set_guest_errno(13); return -1; } return 0; }
     /* the made-up /proc files exist, as b_stat says (Mono's runtime exits with "Mono requires /proc to be mounted" without /proc/self/maps) */
