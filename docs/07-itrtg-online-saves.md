@@ -12,8 +12,11 @@ This fork is Husk 3.4 (Leviidev/Husk, build 149) with two changes on top, made s
    with `-systemallocator`, so its memory comes from the system's malloc (`TL_UNITY_SYSTEM_ALLOCATOR=0` keeps Unity's own
    allocators). Unity reads boot.config straight out of the APK, so the setting there could not be changed on the way.
    ITRTG also hands each frame to the screen on the GPU instead of copying it through the CPU.
-3. **Switching apps.** When you leave Husk, the game is paused, which makes it save. Husk now asks iOS for a few seconds of
-   background time so that save can finish before iOS suspends Husk, and possibly ends it later.
+3. **Switching apps.** When you leave Husk, a Unity game now goes through what a phone does: it loses the window's focus, is
+   paused and is stopped; coming back, it is restarted, started and resumed, and gets the focus back. Husk used to pause and
+   resume it only, and Unity tells a game about the focus and the stop too (OnApplicationFocus, and the pause of a player
+   that allows a resizable window), so a game that counts its time away from those did not count it. Being paused makes the
+   game save, so Husk also asks iOS for a few seconds of background time to let that save finish before iOS suspends Husk.
 
 ## Install, and the test channel
 
@@ -61,6 +64,9 @@ When the online save does not find its player, or the game stops, these say why:
   - `net: the game looks up <host>` lines show each server the game contacts, once each. If the save server never appears,
     the game never tried to reach it. `-- not found` means the name did not resolve.
   - `unity: command line "-systemallocator"` says the player was started with the system's malloc for its memory.
+  - `javaapp: left the screen …` and `javaapp: back on the screen …` mark switching apps, and `unity: nativePause`,
+    `unity: nativeResume` and `unity: nativeFocusChanged(…)` show what Unity was told (OnApplicationPause,
+    OnApplicationFocus).
 - **Online Saves › Copy Sign-In Details.** This copies the build, the game, the SHA-1 of the APK's signing certificate, the
   Google account, the player and the last sign-in error. It includes no passwords and no tokens. The certificate SHA-1 should
   match the one Google Play lists for the game; an APK re-signed by someone else will not sign in.
