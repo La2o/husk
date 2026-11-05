@@ -1404,13 +1404,18 @@ size_t tl_mm_address_space_used(size_t *guest)
 }
 
 void *tl_ld_map_code(const char *path, uint64_t off, size_t len, void *at);
-/* Whether a mapping's caller is Unity's engine or its IL2CPP code, which never JIT: their hinted data stays ordinary memory. */
+/* Whether a mapping's caller is Unity's engine or its IL2CPP code, which never JIT: their hinted data stays ordinary memory.
+ * By the library's soname, and by its file name: either may be what the loader has (a split APK's libraries are opened by path). */
+static bool is_unity_lib(const char *name)
+{
+    const char *base = name ? strrchr(name, '/') : NULL;
+    base = base ? base + 1 : name;
+    return base && (!strcmp(base, "libunity.so") || !strcmp(base, "libil2cpp.so"));
+}
 static bool unity_data_caller(const void *ret)
 {
-    const char *path = tl_ld_lib_name(tl_ld_lib_of(ret));
-    const char *base = path ? strrchr(path, '/') : NULL;
-    base = base ? base + 1 : path;
-    return base && (!strcmp(base, "libunity.so") || !strcmp(base, "libil2cpp.so"));
+    tl_lib *L = tl_ld_lib_of(ret);
+    return is_unity_lib(tl_ld_lib_soname(L)) || is_unity_lib(tl_ld_lib_name(L));
 }
 
 static void *b_mmap(void *addr, size_t len, int prot, int flags, int fd, long off)
@@ -1455,7 +1460,12 @@ static void *b_mmap(void *addr, size_t len, int prot, int flags, int fd, long of
         size_t n = (len + TL_XMEM_PAGE - 1) & ~(size_t)(TL_XMEM_PAGE - 1);
         if (tl_xmem_alloc(n, &rx, &rw)) {
             memset(rw, 0, n);
-            tl_note_once("a JIT's code memory (mmap hinted near the code) comes from the JIT region");
+            static _Atomic int told;
+            if (told++ < 4) {
+                tl_lib *L = tl_ld_lib_of(__builtin_return_address(0));
+                const char *who = tl_ld_lib_soname(L) ? tl_ld_lib_soname(L) : tl_ld_lib_name(L);
+                tl_log_line("bionic: a JIT's code memory (mmap of %zu bytes hinted near the code, by %s) comes from the JIT region", len, who ? who : "?");
+            }
             mm_trace("mmap-jit", rx, len, prot, flags);
             return rx;
         }

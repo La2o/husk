@@ -413,6 +413,12 @@ static bool gpu_comp_copy(EGLDisplay d, EGLSurface s)
     }
     if (cache.disabled) return false;
 
+    /* An error the game's own drawing left (GL_INVALID_ENUM from a query ANGLE does not know, say) would read as this copy's:
+     * taken first, so only the copy's own errors count. */
+    unsigned stale = 0;
+    for (int i = 0; i < 16; i++) { unsigned e = a_glGetError(); if (!e) break; stale = e; }
+    static atomic_bool told_stale;
+    if (stale && !atomic_exchange(&told_stale, true)) tl_log_line("egl: the game's GL left error %#x before the GPU compositor copy (cleared)", stale);
     int prev_active = 0x84C0, prev_tex = 0, prev_read_fb = 0;
     a_glGetIntegerv(0x84E0 /* GL_ACTIVE_TEXTURE */, &prev_active);
     a_glActiveTexture(0x84C0 /* GL_TEXTURE0 */);
