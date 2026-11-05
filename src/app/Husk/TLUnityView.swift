@@ -938,6 +938,8 @@ struct TLCocosAttemptView: View {
             UIApplication.shared.isIdleTimerDisabled = settings.keepAwake
             if uiHidden { showHint() }
             CrashReport.gameStarted(app)
+            PlayGamesSignIn.gameStarting(app)
+            settings.frameHandoff.apply()
             padLayout = PadLayout.load(app.id)
             model.start()
         }

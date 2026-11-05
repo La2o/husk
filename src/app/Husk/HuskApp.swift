@@ -83,6 +83,10 @@ struct HuskApp: App {
 
         // Game controllers, for the games the native runtime runs.
         Task { @MainActor in HuskGamepads.shared.start() }
+        // Play Games for those games, signed in with the Google account in the Store (Play/PlayGamesSignIn.swift).
+        PlayGamesSignIn.install()
+        // Their saves to iCloud Drive each time Husk leaves the screen with one loaded (CloudSaves.swift).
+        ICloudSaves.install()
     }
 
     var body: some Scene {
