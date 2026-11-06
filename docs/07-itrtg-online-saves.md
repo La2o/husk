@@ -12,7 +12,12 @@ This fork is Husk 3.4 (Leviidev/Husk, build 149) with two changes on top, made s
    with `-systemallocator`, so its memory comes from the system's malloc (`TL_UNITY_SYSTEM_ALLOCATOR=0` keeps Unity's own
    allocators). Unity reads boot.config straight out of the APK, so the setting there could not be changed on the way.
    ITRTG also hands each frame to the screen on the GPU instead of copying it through the CPU.
-3. **Switching apps.** When you leave Husk, a Unity game now goes through what a phone does: it loses the window's focus, is
+3. **Playing without JIT** (Settings › Play without JIT, with the certificate Husk is signed with). Husk turns the game's
+   libraries into signed dylibs, so the game needs no JIT and no Wi-Fi to start. Unity 6 died a moment after it started
+   ("CODESIGNING Invalid Page" in iOS's crash report): Husk sent the code's reads of read-only data (Unity's relative C++
+   vtables) to a writable copy, so a method's address landed in the copy, where there is no code. Read-only data is now read
+   where it is, as relocations already did; converted libraries are made again once (version 11).
+4. **Switching apps.** When you leave Husk, a Unity game now goes through what a phone does: it loses the window's focus, is
    paused and is stopped; coming back, it is restarted, started and resumed, and gets the focus back. Husk used to pause and
    resume it only, and Unity tells a game about the focus and the stop too (OnApplicationFocus, and the pause of a player
    that allows a resizable window), so a game that counts its time away from those did not count it. Being paused makes the
