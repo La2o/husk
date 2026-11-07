@@ -25,21 +25,27 @@ This fork is Husk 3.4 (Leviidev/Husk, build 149) with two changes on top, made s
 
 ## Install, and the test channel
 
-Add this source in Feather, AltStore or SideStore. Its address does not change:
+Add this source in AltStore, SideStore or Feather. Its address does not change:
 
     https://github.com/La2o/husk/releases/download/feed/source.json
 
-The source works as a test channel. Every push builds a new IPA (`.github/workflows/husk-ipa.yml`): a push to any branch
-that has the workflow, or **Run workflow** on the Actions tab, which can also take a note of what to test. Each build is
-published as a release tagged `fork-3.4-<run>` and added to the source:
+It lists the builds of `main`, from 3.4.10 on (the first that plays ITRTG with and without JIT), each with a short
+"What's new". Every push that changes the app builds a new IPA (`.github/workflows/husk-ipa.yml`), published as a release
+tagged `fork-3.4-<run>`:
 
 - **Its version is 3.4.<run>** (build 149.<run>), so it is always newer than the Husk 3.4 it replaces, and newer than the
   build before it.
-- **Its description in Feather** says which branch and commit it is from, what to test, and the commits since the build
-  before. Builds of branches other than `main` are marked as test builds.
+- **Its What's new** comes from the `Changelog:` lines of the commits since the build before (plain text, for players). The
+  GitHub release also names the branch, the commit and every commit since the build before.
 - **The release also carries `Husk.app.dSYM.zip`**, the debug symbols of that exact binary, for symbolicating an iOS crash
   report (`.ips`).
 - **Husk's Settings and every log show the commit** a running build is from, so a log can be matched to its build.
+
+The test channel lists every build of every branch, older ones and test builds included, with the full release notes:
+
+    https://github.com/La2o/husk/releases/download/feed/test-source.json
+
+**Run workflow** on the Actions tab builds any branch, and can take a note of what to test.
 
 Sign the IPA with your own certificate. The bundle id is Husk's own (`com.husk.app`), so it installs over Husk and keeps
 your games. Back up your saves first anyway (the game's page › Back Up Saves).

@@ -1,7 +1,9 @@
 name: Husk IPA
 
-# Builds Husk with this fork's changes and publishes it for Feather, AltStore and SideStore: a test channel, where every build
-# of every branch is one tap away and says what it is.
+# Builds Husk with this fork's changes and publishes it for Feather, AltStore and SideStore, in two sources made from the same
+# releases: the public one (source.json), with main's builds from the first that plays Idling to Rule the Gods well, each
+# described by its "What's new"; and the test channel (test-source.json), where every build of every branch is one tap away
+# and says what it is. A commit's "Changelog: <plain text>" lines are its What's new.
 #
 # Husk's own native parts (QEMU, ANGLE, MoltenVK, the PS4 layer, the Java runtime) take hours and a Mac with the Android
 # images to build; they are taken as they are from the official release this fork is based on (HUSK_RUNTIME), and only the
@@ -10,7 +12,8 @@ name: Husk IPA
 # the commit and the changes since the build before, then rewrites the source (source.json on the release tagged "feed"),
 # whose address never changes:
 #
-#   https://github.com/La2o/husk/releases/download/feed/source.json
+#   https://github.com/La2o/husk/releases/download/feed/source.json        (public)
+#   https://github.com/La2o/husk/releases/download/feed/test-source.json   (test channel)
 #
 # A push to any branch that has this file builds (builds of branches other than MAIN_LINE are marked as tests); so does
 # "Run workflow" on the Actions tab, for any branch, with a note of what to test.
@@ -180,7 +183,15 @@ jobs:
           PREV_TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '[.[] | select(.tag_name | startswith("fork-"))][0].tag_name // ""')
           PREV_SHA=""
           [ -n "$PREV_TAG" ] && PREV_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$PREV_TAG" --jq .sha 2>/dev/null || true)
+          # What's new, for players: the "Changelog:" lines of the commits since the build before
+          if [ -n "$PREV_SHA" ] && git merge-base --is-ancestor "$PREV_SHA" HEAD 2>/dev/null; then RANGE="$PREV_SHA..HEAD"; else RANGE="-1"; fi
+          WHATS_NEW=$(git log --no-merges --format=%B $RANGE | sed -n 's/^Changelog: *//p' | sed '/^[[:space:]]*$/d' | sed 's/^/- /')
+          [ -n "$WHATS_NEW" ] || WHATS_NEW="- Fixes and improvements."
           {
+            echo "## What's new"
+            echo "$WHATS_NEW"
+            echo "<!-- end of what's new -->"
+            echo
             echo "**$VERSION** (build $HUSK_RUNTIME_BUILD.$GITHUB_RUN_NUMBER) from \`$BRANCH\` at \`${GITHUB_SHA::7}\`, on Husk $HUSK_RUNTIME."
             if [ "$BRANCH" != "$MAIN_LINE" ]; then echo; echo "Test build of the branch $BRANCH."; fi
             if [ -n "${NOTES:-}" ]; then echo; echo "What to test: $NOTES"; fi
@@ -210,13 +221,16 @@ jobs:
         run: |
           set -euo pipefail
           URL="https://github.com/$GITHUB_REPOSITORY/releases/download/feed/source.json"
+          TEST_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/feed/test-source.json"
           gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
           python3 scripts/update_fork_source.py "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/source.json" "$URL" "$HUSK_RUNTIME_BUILD"
+          python3 scripts/update_fork_source.py "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/test-source.json" "$TEST_URL" "$HUSK_RUNTIME_BUILD" --all
           gh release view feed --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create feed --repo "$GITHUB_REPOSITORY" --title "Source for Feather, AltStore and SideStore" \
               --notes "Add this source: $URL" --latest=false
-          gh release upload feed "$RUNNER_TEMP/source.json" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload feed "$RUNNER_TEMP/source.json" "$RUNNER_TEMP/test-source.json" --repo "$GITHUB_REPOSITORY" --clobber
           echo "Source: $URL"
+          echo "Test channel: $TEST_URL"
 
       - name: Compiler log
         if: failure()

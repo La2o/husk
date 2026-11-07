@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Installing Husk and turning on JIT
-    url: https://github.com/Leviidev/Husk#installing
-    about: How to install Husk (SideStore, AltStore, TrollStore) and get JIT working. Read this before reporting an install or JIT problem.
+  - name: Other games, or Husk in general
+    url: https://github.com/Leviidev/Husk/issues
+    about: This fork only adds the fixes for Idling to Rule the Gods. Problems with other games or Husk itself go to the original Husk.
+  - name: Installing Husk, JIT and Play without JIT
+    url: https://github.com/La2o/husk#install-and-play
+    about: How to install this version and set up Play without JIT or JIT. Read it before reporting an install problem.

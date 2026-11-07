@@ -1,0 +1,28 @@
+name: Something else in this version
+description: A problem with this fork's changes that isn't about ITRTG itself (installing it, Play Games sign-in in Husk, the source, ...).
+title: "[Fork] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For other games, or Husk in general, the original Husk is the place: github.com/Leviidev/Husk/issues. This fork only adds the ITRTG fixes.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, step by step, and what happened instead of what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log or screenshots
+      description: Husk's log helps most (Settings › About › Open Console, or a game's page › Technical Details › Share Log). It has no passwords or tokens.
+  - type: input
+    id: build
+    attributes:
+      label: Husk build, device and iOS version
+      placeholder: Version 3.4.11 · 1a2b3c4, iPhone 16 Pro, iOS 27.2
+    validations:
+      required: true

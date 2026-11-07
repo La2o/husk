@@ -1,0 +1,94 @@
+name: Idling to Rule the Gods problem
+description: ITRTG won't start, crashes, doesn't find your online save, loses time away, or something else is wrong in it.
+title: "[ITRTG] "
+labels: ["bug", "itrtg"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The log is what makes a problem fixable, so please attach it.
+
+        The log has no passwords or tokens. It does show your Play Games name and player ID; edit them out if you prefer.
+  - type: dropdown
+    id: problem
+    attributes:
+      label: What goes wrong?
+      options:
+        - It won't start, or Husk closes while it starts
+        - It crashes (Husk closes) while playing
+        - It crashes after switching apps or coming back
+        - Online save / Play Games sign-in doesn't work
+        - Time away isn't counted
+        - Graphics, sound or touch is wrong
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, step by step, and what happened instead of what you expected.
+      placeholder: |
+        1. Started ITRTG
+        2. Pressed Load Online
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: |
+        **Required.** In Husk, open the game's page › Technical Details › **Share Log**, and attach the file here (drag it into this box).
+        If Husk closed, open it again: it shows a crash report you can share. Attach that too.
+        If it closed with no report, iOS has its own: iPhone **Settings › Privacy & Security › Analytics & Improvements › Analytics Data**, the entry starting with **Husk** from that time (an `.ips` file).
+      placeholder: Drag the log, the crash report and the .ips file here.
+    validations:
+      required: true
+  - type: dropdown
+    id: jit
+    attributes:
+      label: How do you run it?
+      options:
+        - Play without JIT
+        - JIT (built-in StikJIT)
+        - JIT (StikDebug)
+        - JIT (other)
+        - I don't know
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Husk build
+      description: Husk's Settings shows it under "About Husk", for example "Version 3.4.11 · 1a2b3c4". Copy the whole line.
+      placeholder: Version 3.4.11 · 1a2b3c4
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and iOS version
+      placeholder: iPhone 16 Pro, iOS 27.2
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install Husk?
+      options:
+        - AltStore
+        - SideStore
+        - Feather
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: I installed Husk from this fork's source (github.com/La2o/husk), and it's the newest build there.
+          required: true
+        - label: I downloaded ITRTG from Husk's Store, not from an APK file.
+          required: true

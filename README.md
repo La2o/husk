@@ -21,11 +21,44 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Leviidev/Husk?style=flat-square&color=5B49EB&labelColor=111111" alt="GPL-2.0-or-later"></a>
 </p>
 
-> **This fork** (La2o/husk) adds Google Play Games sign-in with your own Google account, so games that save online under
-> their Play Games player (Idling to Rule the Gods) find the same saves as on Android. It also fixes Unity 6 start-up.
-> Its test channel for Feather, AltStore and SideStore lists every build of every branch with what changed:
-> `https://github.com/La2o/husk/releases/download/feed/source.json`. Details:
-> [docs/07-itrtg-online-saves.md](docs/07-itrtg-online-saves.md).
+## This version: Idling to Rule the Gods, with online saves
+
+This is **[Husk by Leviidev](https://github.com/Leviidev/Husk)** with the fixes that make **Idling to Rule the Gods** play on
+iPhone, with its online save:
+
+- **Play Games sign-in** with your own Google account, so Load Online and Save Online use the same save as your other devices.
+- **Unity 6 fixes:** no crashes at start or after switching apps, and the time you were away is counted when you come back.
+- **Play without JIT** for Unity 6 games, so they start offline.
+
+The fixes are offered to the original Husk in [pull request #245](https://github.com/Leviidev/Husk/pull/245). Until it is
+merged, only this version has them.
+
+### What you need
+
+- An iPhone on iOS 15.5 or later
+- A way to sideload apps (install them from outside the App Store): [AltStore](https://altstore.io) is free; SideStore and
+  Feather work too
+- To continue your game: the Google account you use for ITRTG's online save
+
+### Install and play
+
+1. Add this source in AltStore, SideStore or Feather, and install Husk from it:
+   ```
+   https://github.com/La2o/husk/releases/download/feed/source.json
+   ```
+2. Set up **Play without JIT** (recommended: no Wi-Fi needed) with its [guide](https://itslevii.dev/docs/play-without-jit),
+   or turn on [JIT](https://itslevii.dev/docs/jit).
+3. In Husk's **Store** tab, sign in with the Google account you play ITRTG with.
+4. Download **Idling to Rule the Gods** from Husk's Store, not from an APK file (an APK from elsewhere may be re-signed, and
+   then Play Games cannot sign in).
+5. Start it and use **Load Online** right away, before the game saves online by itself (every 30 minutes) over your save.
+
+### Problems
+
+[Open an issue](https://github.com/La2o/husk/issues/new/choose) and attach the game's log: its page in Husk › Technical
+Details › Share Log. How it all works: [docs/07-itrtg-online-saves.md](docs/07-itrtg-online-saves.md).
+
+---
 
 Add an APK, tap it, and it opens full-screen.
 
@@ -34,6 +67,9 @@ Add an APK, tap it, and it opens full-screen.
 - **PS4** — fake packages and game folders on iOS 17.4+.
 
 ## Install
+
+**This version:** use the source in [Install and play](#install-and-play) above. The source and releases below are the
+original Husk's, without the fixes above.
 
 Sideload with SideStore, AltStore, or TrollStore. iOS 15.5 or later.
 
