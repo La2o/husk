@@ -29,9 +29,10 @@ Add this source in AltStore, SideStore or Feather. Its address does not change:
 
     https://github.com/La2o/husk/releases/download/feed/source.json
 
-It lists the builds of `main`, from 3.4.10 on (the first that plays ITRTG with and without JIT), each with a short
-"What's new". Every push that changes the app builds a new IPA (`.github/workflows/husk-ipa.yml`), published as a release
-tagged `fork-3.4-<run>`:
+It lists every regular build, newest first, so the one a store offers is the latest. A build from 3.4.10 on (the first
+that plays ITRTG with and without JIT) has a short "What's new"; an older one says that it does not work, and why. Every
+push that changes the app builds a new IPA (`.github/workflows/husk-ipa.yml`), published as a release tagged
+`fork-3.4-<run>`:
 
 - **Its version is 3.4.<run>** (build 149.<run>), so it is always newer than the Husk 3.4 it replaces, and newer than the
   build before it.
@@ -41,11 +42,12 @@ tagged `fork-3.4-<run>`:
   report (`.ips`).
 - **Husk's Settings and every log show the commit** a running build is from, so a log can be matched to its build.
 
-The test channel lists every build of every branch, older ones and test builds included, with the full release notes:
+The test channel also lists test builds of other branches, and gives every build's full release notes:
 
     https://github.com/La2o/husk/releases/download/feed/test-source.json
 
-**Run workflow** on the Actions tab builds any branch, and can take a note of what to test.
+**Run workflow** on the Actions tab builds any branch, and can take a note of what to test. A change to
+`scripts/update_fork_source.py` alone rewrites both sources without a build (`.github/workflows/husk-source.yml`).
 
 Sign the IPA with your own certificate. The bundle id is Husk's own (`com.husk.app`), so it installs over Husk and keeps
 your games. Back up your saves first anyway (the game's page › Back Up Saves).

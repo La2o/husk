@@ -1,0 +1,49 @@
+name: Husk source
+
+# Rewrites the two sources for Feather, AltStore and SideStore (source.json and test-source.json, on the release tagged
+# "feed") from the fork's releases, without building anything: for a change to how the source describes the builds
+# (scripts/update_fork_source.py). The IPA workflow (husk-ipa.yml) does the same after each build it publishes.
+#
+# It runs on a push to main that changes the script or this file, and from "Run workflow" on the Actions tab.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/update_fork_source.py'
+      - '.github/workflows/husk-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# The IPA workflow's group: the two never write the sources at once.
+concurrency:
+  group: husk-ipa
+  cancel-in-progress: false
+
+env:
+  # As in husk-ipa.yml: the build number of the official release the fork's builds are numbered after (149.<run>).
+  HUSK_RUNTIME_BUILD: '149'
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Source for Feather / AltStore / SideStore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/feed/source.json"
+          TEST_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/feed/test-source.json"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          python3 scripts/update_fork_source.py "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/source.json" "$URL" "$HUSK_RUNTIME_BUILD"
+          python3 scripts/update_fork_source.py "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/test-source.json" "$TEST_URL" "$HUSK_RUNTIME_BUILD" --all
+          gh release upload feed "$RUNNER_TEMP/source.json" "$RUNNER_TEMP/test-source.json" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Source: $URL"
+          echo "Test channel: $TEST_URL"
