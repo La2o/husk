@@ -6,10 +6,11 @@ Husk.ipa. The source lists them newest first, so Feather, AltStore and SideStore
 tap away. It is written from the Releases API after each upload rather than from the workflow's artifacts, whose links expire.
 
 Two sources are made from the same releases:
-- the public one (source.json, the address people are given): builds of main only, from the first one that plays Idling to
-  Rule the Gods well (OLDEST_LISTED_RUN), each described by its "What's new" -- the plain lines the release notes start with
-  (the workflow collects them from "Changelog:" lines in the commits);
-- with --all, the test channel (test-source.json): every build of every branch, with the full release notes.
+- the public one (source.json, the address people are given): every regular build, newest first. A build from
+  FIRST_WORKING_RUN on is described by its "What's new" -- the plain lines the release notes start with (the workflow
+  collects them from "Changelog:" lines in the commits). An older one says that it does not work, and why. Test builds of
+  other branches (prereleases) are left out, so the build a store offers as the latest is always a regular one;
+- with --all, the test channel (test-source.json): those too, each with the full release notes.
 """
 import json
 import re
@@ -34,28 +35,43 @@ TEST_DESCRIPTION = (
     "since the build before. Test builds of other branches say so. For regular use, add "
     "https://github.com/La2o/husk/releases/download/feed/source.json instead."
 )
-# 3.4.10: the first build that plays Idling to Rule the Gods with and without JIT. The builds before it crashed (Unity 6's
-# allocator, Play without JIT) or did not count the time away; they stay on GitHub, but the public source does not offer them.
-OLDEST_LISTED_RUN = 10
+# 3.4.10: the first build that plays Idling to Rule the Gods with and without JIT. The builds before it are listed too, and
+# say what is wrong with them.
+FIRST_WORKING_RUN = 10
+NOT_WORKING_EARLY = ("Not working: an early build. Idling to Rule the Gods crashes in it, at start or while playing. "
+                     "Use the newest build.")
+NOT_WORKING = {
+    8: "Not working properly: Idling to Rule the Gods plays with JIT, but the time away is not counted after switching apps, "
+       "and it crashes with Play without JIT. Use the newest build.",
+    9: "Not working with Play without JIT: Idling to Rule the Gods plays with JIT only, and crashes without it. "
+       "Use the newest build.",
+}
 WHATS_NEW_END = "<!-- end of what's new -->"
 REPORT = "Problems? github.com/La2o/husk/issues, with the game's log (its page > Technical Details > Share Log)."
-# What's new for builds published before the release notes carried it.
-EARLIER_WHATS_NEW = {
+# What's new for builds whose release notes do not carry it (3.4.10), or carry what is no longer so (3.4.11 said the source
+# lists only builds that work). These win over the release notes.
+WHATS_NEW_INSTEAD = {
+    11: ["No change to the game (same as 3.4.10)."],
     10: ["Unity 6 games, Idling to Rule the Gods among them, now play with Play without JIT too, so they start offline.",
          "With the earlier fixes: Play Games sign-in for online saves, no more crashes at start or after switching apps, "
          "and the time away is counted when you come back."],
 }
 
 
+def not_working(run: int) -> str:
+    """What is wrong with a build from before the first working one; empty for the others."""
+    return "" if run >= FIRST_WORKING_RUN else NOT_WORKING.get(run, NOT_WORKING_EARLY)
+
+
 def whats_new(body: str, run: int) -> str:
     """The public description of a build: its What's new lines, and where to report a problem."""
-    lines = []
-    if WHATS_NEW_END in body:
+    lines = list(WHATS_NEW_INSTEAD.get(run, []))
+    if not lines and WHATS_NEW_END in body:
         for line in body.split(WHATS_NEW_END, 1)[0].splitlines():
             line = line.strip()
             if line.startswith("- "):
                 lines.append(line[2:].strip())
-    lines = lines or EARLIER_WHATS_NEW.get(run, []) or ["Fixes and improvements."]
+    lines = lines or ["Fixes and improvements."]
     return "What's new:\n" + "\n".join(f"- {l}" for l in lines) + "\n\n" + REPORT
 
 
@@ -68,21 +84,25 @@ def generate(releases: list, source_url: str, base_build: str = "", everything: 
         base, run = m.group(1), int(m.group(2))
         if run in seen:
             continue
-        if not everything and (r.get("prerelease") or run < OLDEST_LISTED_RUN):
-            continue                                   # a test build of another branch, or one from before ITRTG played well
+        if not everything and r.get("prerelease"):
+            continue                                   # a test build of another branch: the test channel has it
         assets = [a for a in r.get("assets", [])
                   if a.get("name") == IPA and a.get("size", 0) > 0 and a.get("state", "uploaded") == "uploaded"]
         if len(assets) != 1:
             continue
         seen.add(run)
         date = r.get("published_at") or r.get("created_at") or datetime.now(timezone.utc).isoformat()
+        body, broken = (r.get("body") or "").strip(), not_working(run)
+        if everything:
+            description = f"{broken}\n\n{body}" if broken else body
+        else:
+            description = broken or whats_new(body, run)
         versions.append({
             "version": f"{base}.{run}",
             "buildVersion": f"{base_build}.{run}" if base_build else str(run),
             "run": run,
             "date": date,
-            "localizedDescription": ((r.get("body") or "").strip() if everything
-                                     else whats_new(r.get("body") or "", run))[:4000],
+            "localizedDescription": description[:4000],
             "downloadURL": assets[0]["browser_download_url"],
             "size": assets[0]["size"],
             "minOSVersion": "15.5",
