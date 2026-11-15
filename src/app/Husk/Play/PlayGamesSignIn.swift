@@ -119,6 +119,46 @@ enum PlayGamesSignIn {
     static let onlineSaveGames: Set<String> = ["de.shugasu.itrtg"]
     static func savesOnline(_ app: TLApp) -> Bool { app.packageName.map(onlineSaveGames.contains) ?? false }
 
+    /// Whether the game's manifest declares Google Play Games: the `com.google.android.gms.games.APP_ID` meta-data the Play
+    /// Games SDK requires of a game. Such a game may keep progress under its player, as the games above are known to. Read
+    /// from the base APK once per run of Husk.
+    static func declaresPlayGames(_ app: TLApp) -> Bool {
+        guard let apk = app.apks.first else { return false }
+        state.lock.lock()
+        let known = state.declares[apk]
+        state.lock.unlock()
+        if let known { return known }
+        var declares = false
+        if let manifest = TranslationLayerStore.entry(apk, "AndroidManifest.xml", limit: 8 << 20) {
+            declares = ApkMetadata.elements(manifest).contains { element in
+                element.name == "meta-data" && element.attributes.contains { attr in
+                    // android:name, by its name or (a manifest with its attribute names stripped) by its framework id
+                    (attr.name == "name" || attr.id == 0x0101_0003) && attr.value == "com.google.android.gms.games.APP_ID"
+                }
+            }
+        }
+        state.lock.lock()
+        state.declares[apk] = declares
+        state.lock.unlock()
+        return declares
+    }
+
+    /// Whether to offer the Google sign-in before this game starts. There is no Google account yet, and either the game is
+    /// known to save online, or it declares Play Games and the person has not chosen to play it without signing in.
+    static func offersSignIn(_ app: TLApp) -> Bool {
+        guard !hasGoogleAccount else { return false }
+        if savesOnline(app) { return true }
+        guard let pkg = app.packageName, declaresPlayGames(app) else { return false }
+        return !UserDefaults.standard.bool(forKey: "husk.pgs.declined.\(pkg)")
+    }
+
+    /// The person chose to play without signing in. A game that only declares Play Games is not asked about again; one known
+    /// to save online is asked on every run of Husk, as before.
+    static func declinedSignIn(_ app: TLApp) {
+        guard let pkg = app.packageName, !savesOnline(app) else { return }
+        UserDefaults.standard.set(true, forKey: "husk.pgs.declined.\(pkg)")
+    }
+
     // MARK: answers
 
     private final class State {
@@ -128,6 +168,8 @@ enum PlayGamesSignIn {
         var players: [String: Player] = [:]
         /// Per account, package and scope: a token and when it stops working.
         var tokens: [String: (String, Date)] = [:]
+        /// Per base APK: whether its manifest declares Play Games.
+        var declares: [String: Bool] = [:]
         /// Sign-ins under way, so a second ask waits for the first rather than asking Google again.
         var pending: [String: DispatchGroup] = [:]
         /// Certificate digests by APK path.

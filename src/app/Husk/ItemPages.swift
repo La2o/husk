@@ -293,11 +293,14 @@ struct GamePage: View {
         } message: {
             Text(prepareFailed ?? "")
         }
-        .confirmationDialog("Sign in with Google for online saves?", isPresented: $confirmOnlineSignIn, titleVisibility: .visible) {
+        .confirmationDialog(onlineSignInTitle, isPresented: $confirmOnlineSignIn, titleVisibility: .visible) {
             Button("Sign In with Google") { onlineSignIn = true }
-            Button("Play Without Online Saves") { play() }
+            Button(onlineSignInDecline) {
+                PlayGamesSignIn.declinedSignIn(app)
+                play()
+            }
         } message: {
-            Text("\(app.label) keeps its online saves under your Google Play Games player. Sign in with the Google account you play it with on Android, and the game's Load Online finds your progress.")
+            Text(onlineSignInMessage)
         }
         .sheet(isPresented: $onlineSignIn) { GoogleSignInSheet() }
         .confirmationDialog("Close Husk?", isPresented: $confirmQuit, titleVisibility: .visible) {
@@ -319,12 +322,27 @@ struct GamePage: View {
         }
     }
 
+    /// The sign-in offer's words: for a game known to save online under its Play Games player, and for one that only declares
+    /// Play Games in its manifest (it may, Husk does not know).
+    private var onlineSignInTitle: String {
+        PlayGamesSignIn.savesOnline(app) ? "Sign in with Google for online saves?" : "Sign in with Google for Play Games?"
+    }
+    private var onlineSignInDecline: String {
+        PlayGamesSignIn.savesOnline(app) ? "Play Without Online Saves" : "Play Without Signing In"
+    }
+    private var onlineSignInMessage: String {
+        PlayGamesSignIn.savesOnline(app)
+            ? "\(app.label) keeps its online saves under your Google Play Games player. Sign in with the Google account you play it with on Android, and the game's Load Online finds your progress."
+            : "\(app.label) uses Google Play Games. If it keeps progress online under your Play Games player, sign in with the Google account you play it with on Android before you start, so it finds that progress. You can also sign in later, under Online Saves on this page."
+    }
+
     /// Play: in JIT-less mode the game's libraries are converted and signed first (once); with Geode on, whatever it is missing
     /// (a newer release, its resources) is fetched first.
     private func play() {
         // A game whose progress lives on its own server under its Play Games player: without a Google account it would start
         // a new game, and its online save could then be overwritten. Asked once per run of Husk.
-        if PlayGamesSignIn.savesOnline(app), !PlayGamesSignIn.hasGoogleAccount, !askedOnlineSignIn {
+        // So may any game that declares Play Games: it is asked once, and not again after "Play Without Signing In".
+        if !askedOnlineSignIn, PlayGamesSignIn.offersSignIn(app) {
             askedOnlineSignIn = true
             confirmOnlineSignIn = true
             return
