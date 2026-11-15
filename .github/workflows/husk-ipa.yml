@@ -1,10 +1,10 @@
 name: Husk IPA
 
 # Builds Husk with this fork's changes and publishes it for Feather, AltStore and SideStore, in two sources made from the same
-# releases: the public one (source.json), with every regular build, each described by its "What's new" (the early ones
-# say that they do not work); and the test channel (test-source.json), with test builds of other branches too and the full
-# notes. A commit's "Changelog: <plain text>" lines are its What's new. A change to the source's script alone rewrites the
-# sources without a build (husk-source.yml).
+# releases, both listing every build: the public one (source.json), each build described by its "What's new" (the early
+# ones say that they do not work, a test build of another branch says that it is one); and the test channel
+# (test-source.json), with the full notes. A commit's "Changelog: <plain text>" lines are its What's new. A change to the
+# source's script alone rewrites the sources without a build (husk-source.yml).
 #
 # Husk's own native parts (QEMU, ANGLE, MoltenVK, the PS4 layer, the Java runtime) take hours and a Mac with the Android
 # images to build; they are taken as they are from the official release this fork is based on (HUSK_RUNTIME), and only the

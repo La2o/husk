@@ -31,8 +31,9 @@ Add this source in AltStore, SideStore or Feather. Its address does not change:
 
     https://github.com/La2o/husk/releases/download/feed/source.json
 
-It lists every regular build, newest first, so the one a store offers is the latest. A build from 3.4.10 on (the first
-that plays ITRTG with and without JIT) has a short "What's new"; an older one says that it does not work, and why. Every
+It lists every build, newest first. A build from 3.4.10 on (the first that plays ITRTG with and without JIT) has a short
+"What's new"; an older one says that it does not work, and why; a test build of a branch other than `main` says first that
+it is one, and names the newest regular build to go back to. So the newest build a store offers can be a test build. Every
 push that changes the app builds a new IPA (`.github/workflows/husk-ipa.yml`), published as a release tagged
 `fork-3.4-<run>`:
 
@@ -44,7 +45,7 @@ push that changes the app builds a new IPA (`.github/workflows/husk-ipa.yml`), p
   report (`.ips`).
 - **Husk's Settings and every log show the commit** a running build is from, so a log can be matched to its build.
 
-The test channel also lists test builds of other branches, and gives every build's full release notes:
+The test channel lists the same builds with their full release notes:
 
     https://github.com/La2o/husk/releases/download/feed/test-source.json
 
