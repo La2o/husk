@@ -81,6 +81,15 @@ enum ApkMetadata {
         return Int(attr.data)
     }
 
+    /// The app's versionName ("4.67"), from the manifest's root element, when it is written there as text.
+    static func versionName(_ manifest: Data) -> String? {
+        guard let root = elements(manifest).first(where: { $0.name == "manifest" }),
+              let attr = root.attributes.first(where: { $0.name == "versionName" }),
+              attr.dataType == 0x03, let value = attr.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty, value.count <= 40 else { return nil }
+        return value
+    }
+
     /// A label that could plausibly be shown to someone. A mis-parse produces
     /// control characters or a hundred lines of XML, not a name.
     private static func clean(_ text: String?) -> String? {

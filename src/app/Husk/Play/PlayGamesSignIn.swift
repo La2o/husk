@@ -143,6 +143,14 @@ enum PlayGamesSignIn {
         return declares
     }
 
+    /// The game's APKs were replaced by an update: what was read from the old ones (its certificate, what its manifest
+    /// declares) is read again.
+    static func forget(apks: [String]) {
+        state.lock.lock()
+        for apk in apks { state.declares[apk] = nil; state.digests[apk] = nil }
+        state.lock.unlock()
+    }
+
     /// Whether to offer the Google sign-in before this game starts. There is no Google account yet, and either the game is
     /// known to save online, or it declares Play Games and the person has not chosen to play it without signing in.
     static func offersSignIn(_ app: TLApp) -> Bool {

@@ -53,6 +53,16 @@ merged, only this version has them.
    then Play Games cannot sign in).
 5. Start it and use **Load Online** right away, before the game saves online by itself (every 30 minutes) over your save.
 
+### Updating the game
+
+When Idling to Rule the Gods gets a new version, open its page in Husk's Library and, under **Version**, press **Check for
+Update**, then **Update**. Husk downloads the new version from Google Play and puts it in the game's place; everything the
+game has saved stays. (Downloading the game again from the Store adds a second copy with nothing saved in it. If you do that
+anyway, Husk asks whether it is an update of the game you have.) Close Husk and open it again first if the game has been
+started since Husk was opened.
+
+Husk itself updates through AltStore, SideStore or Feather, from the source above. That keeps your games and their saves.
+
 ### Problems
 
 [Open an issue](https://github.com/La2o/husk/issues/new/choose) and attach the game's log: its page in Husk › Technical

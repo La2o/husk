@@ -168,6 +168,32 @@ struct TLApp: Identifiable {
     var isGameCategory: Bool { apks.first.map { husk_apk_is_game($0) != 0 } ?? false }
 }
 
+/// An app's version, as its base APK's manifest gives it.
+struct TLAppVersion: Equatable {
+    var package: String?
+    var code: Int?
+    var name: String?
+    /// "4.67"; the build number when the APK names no version.
+    var text: String { name ?? code.map { "build \($0)" } ?? "an unknown version" }
+}
+
+/// Why a game could not be updated, in words for the person.
+struct TLUpdateFailure: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}
+
+/// The games whose files are being swapped right now: the library, read again meanwhile, leaves their folders as they are.
+private final class UpdatingApps: @unchecked Sendable {
+    static let shared = UpdatingApps()
+    private let lock = NSLock()
+    private var ids: Set<String> = []
+    func begin(_ id: String) { lock.lock(); ids.insert(id); lock.unlock() }
+    func end(_ id: String) { lock.lock(); ids.remove(id); lock.unlock() }
+    func contains(_ id: String) -> Bool { lock.lock(); defer { lock.unlock() }; return ids.contains(id) }
+}
+
 // MARK: - Store
 
 /// The apps added for the translation layer, and the phone's answers.
@@ -311,6 +337,172 @@ final class TranslationLayerStore: ObservableObject {
         reload()
     }
 
+    // MARK: updating a game in place
+
+    /// The version of the app whose base APK this is.
+    nonisolated static func version(ofBase apk: String) -> TLAppVersion? {
+        guard let manifest = entry(apk, "AndroidManifest.xml", limit: 8 << 20) else { return nil }
+        return TLAppVersion(package: ApkMetadata.packageName(manifest), code: ApkMetadata.versionCode(manifest),
+                            name: ApkMetadata.versionName(manifest))
+    }
+
+    /// The version of a game in the library (its base APK is the first of its APKs).
+    nonisolated static func installedVersion(_ app: TLApp) -> TLAppVersion? { app.apks.first.flatMap(version(ofBase:)) }
+
+    /// A newer version of a game already here, put in its place: its APKs (and expansion files, when the new version brings its
+    /// own) are replaced in the game's folder, and everything the game has saved stays where it is, as when Android updates an
+    /// app. Answers with the version now here, or with what went wrong (the game is then as it was).
+    func update(_ app: TLApp, with urls: [URL], move: Bool = false) async -> Result<TLAppVersion, TLUpdateFailure> {
+        guard !urls.isEmpty else { return .failure(TLUpdateFailure("There is nothing to update \(app.label) with.")) }
+        guard busy == nil else { return .failure(TLUpdateFailure("Husk is busy with another app. Try again in a moment.")) }
+        // Its engine is loaded in this run of Husk, so its files are open: no changing them under it.
+        if let loaded = husk_native_loaded_apk().map({ String(cString: $0) }), loaded == app.apks.first {
+            return .failure(TLUpdateFailure("\(app.label) has been started in this run of Husk. Close Husk, open it again, and update before starting the game."))
+        }
+        busy = "Updating \(app.label)…"
+        let result = await Task.detached(priority: .userInitiated) { () -> Result<TLAppVersion, TLUpdateFailure> in
+            do { return .success(try Self.swapIn(urls, for: app, move: move)) }
+            catch let failure as TLUpdateFailure { return .failure(failure) }
+            catch { return .failure(TLUpdateFailure(error.localizedDescription)) }
+        }.value
+        busy = nil
+        if case .success = result { PlayGamesSignIn.forget(apks: app.apks) }     // what was read from the old APKs
+        reload()
+        return result
+    }
+
+    nonisolated private static let updateNew = ".update-new", updateOld = ".update-old"
+
+    nonisolated private static func apkPaths(in dir: URL) -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .filter { $0.lowercased().hasSuffix(".apk") }
+            .map { dir.appendingPathComponent($0).path }
+    }
+
+    /// The swap. The new files are first put in .update-new inside the game's folder and checked: the same app, with its base
+    /// APK, and not an older version. Then the old APKs are set aside in .update-old, the new ones moved in (renames on one
+    /// volume), and the old ones deleted. Markers in .update-old say how far it got, so a swap that fails, or that Husk is
+    /// closed in the middle of, is undone (settleUpdate) and the game is as it was.
+    nonisolated private static func swapIn(_ urls: [URL], for app: TLApp, move: Bool) throws -> TLAppVersion {
+        let fm = FileManager.default
+        let dir = TranslationLayer.root.appendingPathComponent(app.id, isDirectory: true)
+        let staged = dir.appendingPathComponent(updateNew, isDirectory: true)
+        let old = dir.appendingPathComponent(updateOld, isDirectory: true)
+        UpdatingApps.shared.begin(app.id)
+        defer { UpdatingApps.shared.end(app.id) }
+        settleUpdate(dir)
+
+        do {
+            try fm.createDirectory(at: staged, withIntermediateDirectories: true)
+            try place(urls, into: staged, move: move)
+        } catch {
+            try? fm.removeItem(at: staged)
+            throw TLUpdateFailure("Husk could not copy the new version: \(error.localizedDescription)")
+        }
+        func refuse(_ why: String) -> TLUpdateFailure {
+            try? fm.removeItem(at: staged)
+            HuskLog.log("tl", "update of \(app.label) refused: \(why)")
+            return TLUpdateFailure(why)
+        }
+        let fresh = orderedAPKs(apkPaths(in: staged))
+        guard let base = fresh.first, let manifest = entry(base, "AndroidManifest.xml", limit: 8 << 20),
+              let isSplit = ApkMetadata.isSplit(manifest) else {
+            throw refuse("That is not an APK Husk can read.")
+        }
+        guard !isSplit else { throw refuse("That is only a part of the app (a split APK). An update needs the app's base APK as well.") }
+        let new = TLAppVersion(package: ApkMetadata.packageName(manifest), code: ApkMetadata.versionCode(manifest),
+                               name: ApkMetadata.versionName(manifest))
+        let was = installedVersion(app)
+        guard let package = new.package else { throw refuse("Husk could not read which app that APK is.") }
+        if let mine = app.packageName ?? was?.package, package != mine {
+            throw refuse("That is another app (\(package)), not \(app.label) (\(mine)).")
+        }
+        if let a = new.code, let b = was?.code, a < b {
+            throw refuse("That is version \(new.text), older than the \(was?.text ?? "one") that is here. A game's saves often do not load in an older version, so Husk does not go back to one.")
+        }
+
+        let obb = dir.appendingPathComponent("obb", isDirectory: true)
+        let bringsOBB = fm.fileExists(atPath: staged.appendingPathComponent("obb").path), hadOBB = fm.fileExists(atPath: obb.path)
+        do {
+            try fm.createDirectory(at: old, withIntermediateDirectories: true)
+            if bringsOBB && !hadOBB { try Data().write(to: old.appendingPathComponent("new-obb")) }
+            for path in apkPaths(in: dir) {
+                try fm.moveItem(atPath: path, toPath: old.appendingPathComponent((path as NSString).lastPathComponent).path)
+            }
+            if bringsOBB && hadOBB { try fm.moveItem(at: obb, to: old.appendingPathComponent("obb")) }
+            try Data().write(to: old.appendingPathComponent("displaced"))          // the old version is out; the new one goes in
+            for name in try fm.contentsOfDirectory(atPath: staged.path) {
+                try fm.moveItem(at: staged.appendingPathComponent(name), to: dir.appendingPathComponent(name))
+            }
+            try Data().write(to: old.appendingPathComponent("complete"))
+        } catch {
+            settleUpdate(dir)
+            HuskLog.log("tl", "update of \(app.label) failed and was undone: \(error.localizedDescription)")
+            throw TLUpdateFailure("Husk could not put the new version in place, so \(app.label) is as it was: \(error.localizedDescription)")
+        }
+        settleUpdate(dir)
+
+        clearDerived(dir)
+        let apks = orderedAPKs(apkPaths(in: dir))
+        describe(apks, into: dir, label: false)                                    // the icon; the name may be the person's own
+        try? Data(scan(apks).utf8).write(to: dir.appendingPathComponent("report.json"))
+        try? "\(scanVersion)".write(to: dir.appendingPathComponent("scan-version.txt"), atomically: true, encoding: .utf8)
+        HuskLog.log("tl", "updated \(app.label) from \(was?.text ?? "?") to \(new.text) (\(apks.count) APK(s)); what it saved is kept")
+        return new
+    }
+
+    /// Ends an update, wherever it stopped. With the "complete" marker the new version is all in place, and the old one is
+    /// deleted. Without it the old one goes back: after "displaced" every APK in the folder is one of the new version's and
+    /// comes out first; before it none of the new version was in yet.
+    nonisolated private static func settleUpdate(_ dir: URL) {
+        let fm = FileManager.default
+        let staged = dir.appendingPathComponent(updateNew, isDirectory: true)
+        let old = dir.appendingPathComponent(updateOld, isDirectory: true)
+        guard fm.fileExists(atPath: old.path) || fm.fileExists(atPath: staged.path) else { return }
+        if fm.fileExists(atPath: old.path), !fm.fileExists(atPath: old.appendingPathComponent("complete").path) {
+            if fm.fileExists(atPath: old.appendingPathComponent("displaced").path) {
+                for path in apkPaths(in: dir) { try? fm.removeItem(atPath: path) }
+                if fm.fileExists(atPath: old.appendingPathComponent("obb").path) || fm.fileExists(atPath: old.appendingPathComponent("new-obb").path) {
+                    try? fm.removeItem(at: dir.appendingPathComponent("obb"))
+                }
+            }
+            for name in ((try? fm.contentsOfDirectory(atPath: old.path)) ?? []) where !["displaced", "complete", "new-obb"].contains(name) {
+                try? fm.moveItem(at: old.appendingPathComponent(name), to: dir.appendingPathComponent(name))
+            }
+            HuskLog.log("tl", "an unfinished update in \(dir.lastPathComponent) was undone: the game is as it was")
+        }
+        try? fm.removeItem(at: old)
+        try? fm.removeItem(at: staged)
+    }
+
+    /// What Husk and the engine made from the old APKs and make again from the new ones, removed from the game's data: the
+    /// empty stand-ins for its libraries, the links to its splits, Android's code cache (which Android empties on an update
+    /// too) and Unity's unpacked IL2CPP data, which must match the new libil2cpp. Nothing the game saved is among them (a save
+    /// backup leaves the same folders out).
+    nonisolated private static func clearDerived(_ dir: URL) {
+        let fm = FileManager.default
+        let folders = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []).filter { $0.lastPathComponent.hasSuffix("-data") }
+        for data in folders {
+            let lib = data.appendingPathComponent("lib", isDirectory: true)
+            for name in ((try? fm.contentsOfDirectory(atPath: lib.path)) ?? []) {
+                let file = lib.appendingPathComponent(name)
+                if let size = (try? fm.attributesOfItem(atPath: file.path))?[.size] as? NSNumber, size.intValue == 0 { try? fm.removeItem(at: file) }
+            }
+            try? fm.removeItem(at: data.appendingPathComponent(".husk-splits"))
+            try? fm.removeItem(at: data.appendingPathComponent("code_cache"))
+            guard let walk = fm.enumerator(at: data, includingPropertiesForKeys: [.isDirectoryKey]) else { continue }
+            var unpacked: [URL] = []
+            for case let url as URL in walk {
+                if walk.level > 8 { walk.skipDescendants(); continue }
+                if url.lastPathComponent == "il2cpp", (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                    unpacked.append(url)
+                    walk.skipDescendants()
+                }
+            }
+            unpacked.forEach { try? fm.removeItem(at: $0) }
+        }
+    }
+
     func runChecks() {
         guard !checking else { return }
         checking = true
@@ -335,6 +527,7 @@ final class TranslationLayerStore: ObservableObject {
 
     nonisolated private static func load(_ dir: URL) -> TLApp? {
         let fm = FileManager.default
+        if !UpdatingApps.shared.contains(dir.lastPathComponent) { settleUpdate(dir) }      // an update Husk was closed in the middle of
         guard let files = try? fm.contentsOfDirectory(atPath: dir.path) else { return nil }
         let names = files.filter { $0.lowercased().hasSuffix(".apk") }
         let apks = orderedAPKs(names.map { dir.appendingPathComponent($0).path })
@@ -357,6 +550,42 @@ final class TranslationLayerStore: ObservableObject {
                         .trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// One app's files put into a folder: APKs as they are, a bundle's APKs taken out of it, expansion files under obb/.
+    nonisolated private static func place(_ urls: [URL], into dir: URL, move: Bool) throws {
+        let fm = FileManager.default
+        for url in urls {
+            // Security-scoped: the picker's URL is only readable inside this pair.
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            // A bundle (.xapk, .apkm, .apks) is a zip of an app's APKs: take them out, and do not keep the bundle itself.
+            if BundleUnpacker.extensions.contains(url.pathExtension.lowercased()) {
+                let names = try BundleUnpacker.unpack(url, into: dir)
+                HuskLog.log("tl", "unpacked \(url.lastPathComponent): \(names.joined(separator: ", "))")
+                if move { try? fm.removeItem(at: url) }
+                continue
+            }
+            var name = url.lastPathComponent
+            // An expansion file (main.<version>.<package>.obb) goes to obb/ under its own name: the runtime finds it there
+            // when the game asks for Android/obb/<package>/<name>
+            let isOBB = name.lowercased().hasSuffix(".obb")
+            if !isOBB && !name.lowercased().hasSuffix(".apk") { name += ".apk" }
+            if isOBB { try fm.createDirectory(at: dir.appendingPathComponent("obb"), withIntermediateDirectories: true) }
+            let dest = isOBB ? dir.appendingPathComponent("obb").appendingPathComponent(name) : dir.appendingPathComponent(name)
+            if move {
+                try fm.moveItem(at: url, to: dest)
+            } else {
+                // Coordinated, so a file that lives in iCloud and is not on the phone yet is downloaded first
+                // (a plain copy of it fails, or finds nothing).
+                var coordinationError: NSError?
+                var copyError: Error?
+                NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { readable in
+                    do { try fm.copyItem(at: readable, to: dest) } catch { copyError = error }
+                }
+                if let failure = coordinationError ?? copyError { throw failure }
+            }
+        }
+    }
+
     /// Copy, name, scan. Returns what went wrong, if anything did.
     nonisolated private static func ingest(_ urls: [URL], move: Bool = false) -> String? {
         let fm = FileManager.default
@@ -364,37 +593,7 @@ final class TranslationLayerStore: ObservableObject {
                                                                isDirectory: true)
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            for url in urls {
-                // Security-scoped: the picker's URL is only readable inside this pair.
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                // A bundle (.xapk, .apkm, .apks) is a zip of an app's APKs: take them out, and do not keep the bundle itself.
-                if BundleUnpacker.extensions.contains(url.pathExtension.lowercased()) {
-                    let names = try BundleUnpacker.unpack(url, into: dir)
-                    HuskLog.log("tl", "unpacked \(url.lastPathComponent): \(names.joined(separator: ", "))")
-                    if move { try? fm.removeItem(at: url) }
-                    continue
-                }
-                var name = url.lastPathComponent
-                // An expansion file (main.<version>.<package>.obb) goes to obb/ under its own name: the runtime finds it there
-                // when the game asks for Android/obb/<package>/<name>
-                let isOBB = name.lowercased().hasSuffix(".obb")
-                if !isOBB && !name.lowercased().hasSuffix(".apk") { name += ".apk" }
-                if isOBB { try fm.createDirectory(at: dir.appendingPathComponent("obb"), withIntermediateDirectories: true) }
-                let dest = isOBB ? dir.appendingPathComponent("obb").appendingPathComponent(name) : dir.appendingPathComponent(name)
-                if move {
-                    try fm.moveItem(at: url, to: dest)
-                } else {
-                    // Coordinated, so a file that lives in iCloud and is not on the phone yet is downloaded first
-                    // (a plain copy of it fails, or finds nothing).
-                    var coordinationError: NSError?
-                    var copyError: Error?
-                    NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { readable in
-                        do { try fm.copyItem(at: readable, to: dest) } catch { copyError = error }
-                    }
-                    if let failure = coordinationError ?? copyError { throw failure }
-                }
-            }
+            try place(urls, into: dir, move: move)
         } catch {
             try? fm.removeItem(at: dir)
             HuskLog.log("tl", "FAILED to add: \(error.localizedDescription)")

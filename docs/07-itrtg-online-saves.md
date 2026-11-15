@@ -68,6 +68,29 @@ your games. Back up your saves first anyway (the game's page › Back Up Saves).
      progress stored under your player.
    - **To move this game somewhere else:** use **Save Online**. ITRTG also saves online by itself every 30 minutes.
 
+## Updating a game
+
+Husk had no way to update a game: a newer version downloaded from the Store became a second game in the library, with
+nothing saved in it. Since 3.4.14 (3.4.13 was its test build) a game is updated in place (`src/app/Husk/GameUpdate.swift`,
+`TranslationLayerStore.update`):
+
+- **The game's page › Version** shows the version that is here, asks Google Play for the newest (**Check for Update**; also
+  quietly when the page opens, at most once an hour, with the Store's session) and, when there is a newer one, downloads it
+  and puts it in the game's place (**Update to …**). **Update from a File** does the same with an APK, a base APK and its
+  splits, or an .xapk / .apkm / .apks bundle.
+- **An APK that arrives in Husk** (a Store download, the share sheet, Files) and has the package of a game in the library
+  is offered as **Update <game>**, beside adding it as a separate game.
+- **What an update does:** the new files are staged inside the game's folder and checked (the same package, with its base
+  APK, and not an older version: saves often do not load in one). The old APKs are set aside, the new ones moved in, the old
+  ones deleted. A swap that fails, or that Husk is closed in the middle of, is undone the next time the library is read,
+  and the game is as it was. Expansion files (`obb/`) are replaced only when the new version brings its own.
+- **What stays:** everything in the game's data folders, as on Android. Only what Husk and the engine make again from the
+  APKs is removed: the empty stand-ins for its libraries, the links to its splits, `code_cache`, and Unity's unpacked
+  `il2cpp` data (which must match the new `libil2cpp.so`). A save backup leaves the same folders out.
+- **Not while it is loaded:** a game that has been started in this run of Husk has its files open, so Husk asks to be
+  closed and opened again first, as for restoring saves.
+- With Play without JIT, the new version's libraries are converted at its first start, as for a new game.
+
 ## Debugging a build
 
 When the online save does not find its player, or the game stops, these say why:

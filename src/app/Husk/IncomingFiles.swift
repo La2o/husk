@@ -222,6 +222,39 @@ final class IncomingFiles: ObservableObject {
         TranslationLayerStore.shared.add(urls, move: true)
     }
 
+    /// The game in the library that these files are a version of, if there is one: the same package. Only APKs are looked
+    /// into (a bundle is not opened for this). Of several copies of the game, the one played last.
+    func updateTarget(for urls: [URL]) async -> TLApp? {
+        let apks = urls.filter { $0.pathExtension.lowercased() == "apk" }.map(\.path)
+        guard !apks.isEmpty else { return nil }
+        let package = await Task.detached { () -> String? in
+            for apk in apks {
+                if let manifest = TranslationLayerStore.entry(apk, "AndroidManifest.xml", limit: 8 << 20),
+                   let package = ApkMetadata.packageName(manifest) { return package }
+            }
+            return nil
+        }.value
+        guard let package else { return nil }
+        return TranslationLayerStore.shared.apps.filter { $0.packageName == package }
+            .max { ($0.lastPlayed ?? .distantPast) < ($1.lastPlayed ?? .distantPast) }
+    }
+
+    /// Put in the place of the version a game in the library has: its saves are kept (GameUpdate.swift).
+    func sendToUpdate(_ app: TLApp) {
+        let urls = waiting
+        waiting = []
+        guard !urls.isEmpty else { return }
+        Task {
+            // Moved, not copied: the copies here are Husk's own.
+            let result = await GameUpdates.shared.install(app, files: urls, move: true)
+            for url in urls { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+            switch result {
+            case .success(let version): AndroidHost.shared.say("Updated \(app.label)", "It is now version \(version.text). Everything it had saved is kept.")
+            case .failure(let failure): AndroidHost.shared.say("Could not update \(app.label)", failure.message, good: false)
+            }
+        }
+    }
+
     /// Installed into Android -- now if it is up, otherwise as soon as it is.
     func sendToAndroid() {
         let urls = waiting
@@ -252,6 +285,8 @@ struct IncomingChooser: View {
     @ObservedObject private var incoming = IncomingFiles.shared
     @ObservedObject private var host = AndroidHost.shared
     @ObservedObject private var guest = GuestImage.shared
+    /// The game in the library these files are a newer (or the same) version of
+    @State private var updateTarget: TLApp?
 
     private var title: String {
         guard let first = incoming.waiting.first else { return "" }
@@ -265,8 +300,18 @@ struct IncomingChooser: View {
                 Text(title).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
             }
 
-            choice(icon: "bolt.fill", title: "Translation Layer",
-                   detail: "Runs the game directly on your iPhone, without starting Android. Best for games.") {
+            if let target = updateTarget {
+                let loaded = GameUpdates.loadedNow(target)
+                choice(icon: "arrow.triangle.2.circlepath", title: "Update \(target.label)",
+                       detail: loaded ? GameUpdates.closeFirst(target)
+                                      : "Puts this version in the place of the one in your library and keeps everything the game has saved.") {
+                    incoming.sendToUpdate(target)
+                }
+                .disabled(loaded)
+            }
+            choice(icon: "bolt.fill", title: updateTarget == nil ? "Translation Layer" : "Add as a Separate Game",
+                   detail: updateTarget == nil ? "Runs the game directly on your iPhone, without starting Android. Best for games."
+                                               : "Adds it beside the one in your library, with nothing saved in it.") {
                 incoming.sendToTranslationLayer()
             }
             choice(icon: "apps.iphone", title: "Android",
@@ -279,6 +324,7 @@ struct IncomingChooser: View {
                 .padding(.top, 2)
         }
         .padding(22)
+        .task(id: incoming.waiting) { updateTarget = await incoming.updateTarget(for: incoming.waiting) }
     }
 
     private var androidDetail: String {
