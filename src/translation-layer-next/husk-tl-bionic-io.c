@@ -1134,17 +1134,73 @@ static int prot_filter(int prot, const char *what)
  * replaced with fresh ones at the same protection instead.
  */
 #define MAX_ANON 65536      /* a Unity 6 game with mimalloc and IL2CPP's GC makes thousands; one past the end is never zeroed */
+/* Kept in address order, and no two overlap (anon_add removes what a new one covers), so their ends ascend as well: the mapping
+ * an address is in is found by halving, where every mmap, munmap and madvise used to read the whole table (twice or more for an
+ * mmap). g_anon_bytes is their lengths added up, kept as they change. All under g_anon_lock. */
 static struct { uintptr_t addr; size_t len; } g_anon[MAX_ANON];
 static int g_nanon;
+static size_t g_anon_bytes;
 static pthread_mutex_t g_anon_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static void anon_remove(uintptr_t addr, size_t len);
+/* The first mapping that ends after addr (g_nanon: none does): the one addr is in, or the next one up. */
+static int anon_first_after(uintptr_t addr)
+{
+    int lo = 0, hi = g_nanon;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (g_anon[mid].addr + g_anon[mid].len <= addr) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+}
+
+static void anon_insert_at(int i, uintptr_t addr, size_t len)
+{
+    memmove(&g_anon[i + 1], &g_anon[i], (size_t)(g_nanon - i) * sizeof(g_anon[0]));
+    g_anon[i].addr = addr; g_anon[i].len = len;
+    g_nanon++; g_anon_bytes += len;
+}
+
+/* Mimalloc reserves a large anonymous range and munmaps the unused ends to align. Keep the list matching that. */
+static void anon_remove_locked(uintptr_t addr, size_t len)
+{
+    uintptr_t end = addr + len;
+    if (!len) return;
+    int i = anon_first_after(addr);
+    if (i < g_nanon && g_anon[i].addr < addr) {              /* it starts below the range: that part stays */
+        uintptr_t e = g_anon[i].addr + g_anon[i].len;
+        g_anon_bytes -= e - addr;
+        g_anon[i].len = addr - g_anon[i].addr;
+        if (e > end) {                                       /* and it ends above it: the range is a hole in one mapping */
+            if (g_nanon < MAX_ANON) anon_insert_at(i + 1, end, e - end);
+            return;
+        }
+        i++;
+    }
+    int j = i;                                               /* [i, j): the mappings wholly inside the range */
+    while (j < g_nanon && g_anon[j].addr + g_anon[j].len <= end) { g_anon_bytes -= g_anon[j].len; j++; }
+    if (j < g_nanon && g_anon[j].addr < end) {               /* the last one ends above the range: that part stays */
+        size_t cut = end - g_anon[j].addr;
+        g_anon[j].addr = end; g_anon[j].len -= cut; g_anon_bytes -= cut;
+    }
+    if (j > i) {
+        memmove(&g_anon[i], &g_anon[j], (size_t)(g_nanon - j) * sizeof(g_anon[0]));
+        g_nanon -= j - i;
+    }
+}
+
+static void anon_remove(uintptr_t addr, size_t len)
+{
+    pthread_mutex_lock(&g_anon_lock);
+    anon_remove_locked(addr, len);
+    pthread_mutex_unlock(&g_anon_lock);
+}
 
 static void anon_add(void *addr, size_t len)
 {
-    anon_remove((uintptr_t)addr, len);                       /* replace what this overlaps, keeping the parts outside it */
+    if (!len) return;
     pthread_mutex_lock(&g_anon_lock);
-    if (g_nanon < MAX_ANON) { g_anon[g_nanon].addr = (uintptr_t)addr; g_anon[g_nanon].len = len; g_nanon++; }
+    anon_remove_locked((uintptr_t)addr, len);                /* replace what this overlaps, keeping the parts outside it */
+    if (g_nanon < MAX_ANON) anon_insert_at(anon_first_after((uintptr_t)addr), (uintptr_t)addr, len);
     else {
         static bool told;
         if (!told) { told = true; tl_log_line("bionic: more than %d anonymous mappings: madvise(MADV_DONTNEED) no longer zero-fills the new ones (allocators that count on it may see old data)", MAX_ANON); }
@@ -1152,34 +1208,11 @@ static void anon_add(void *addr, size_t len)
     pthread_mutex_unlock(&g_anon_lock);
 }
 
-/* Mimalloc reserves a large anonymous range and munmaps the unused ends to align. Keep the list matching that. */
-static void anon_remove(uintptr_t addr, size_t len)
-{
-    uintptr_t end = addr + len;
-    pthread_mutex_lock(&g_anon_lock);
-    for (int i = 0; i < g_nanon; i++) {
-        uintptr_t a = g_anon[i].addr, e = a + g_anon[i].len;
-        if (end <= a || addr >= e) continue;
-        uintptr_t left = addr > a ? addr - a : 0;
-        uintptr_t right_a = end < e ? end : e, right = e > right_a ? e - right_a : 0;
-        if (left) {
-            g_anon[i].len = left;
-            if (right && g_nanon < MAX_ANON) { g_anon[g_nanon].addr = right_a; g_anon[g_nanon].len = right; g_nanon++; }
-        } else if (right) {
-            g_anon[i].addr = right_a; g_anon[i].len = right;
-        } else {
-            g_anon[i] = g_anon[--g_nanon]; i--;
-        }
-    }
-    pthread_mutex_unlock(&g_anon_lock);
-}
-
 /* All the guest has mapped for itself, in bytes of address space. */
 static size_t anon_total(void)
 {
-    size_t t = 0;
     pthread_mutex_lock(&g_anon_lock);
-    for (int i = 0; i < g_nanon; i++) t += g_anon[i].len;
+    size_t t = g_anon_bytes;
     pthread_mutex_unlock(&g_anon_lock);
     return t;
 }
@@ -1188,7 +1221,7 @@ static void anon_zap(uintptr_t addr, size_t len)
 {
     uintptr_t end = addr + len;
     pthread_mutex_lock(&g_anon_lock);
-    for (int i = 0; i < g_nanon; i++) {
+    for (int i = anon_first_after(addr); i < g_nanon && g_anon[i].addr < end; i++) {
         uintptr_t a = g_anon[i].addr > addr ? g_anon[i].addr : addr;
         uintptr_t e = g_anon[i].addr + g_anon[i].len < end ? g_anon[i].addr + g_anon[i].len : end;
         if (a >= e) continue;
@@ -1555,9 +1588,9 @@ static int b_munmap(void *a, size_t l)
 /* Whether a range is inside memory the guest mapped for itself (not a library's own pages). */
 static bool anon_contains(uintptr_t addr, size_t len)
 {
-    bool in = false;
     pthread_mutex_lock(&g_anon_lock);
-    for (int i = 0; i < g_nanon && !in; i++) in = addr >= g_anon[i].addr && addr + len <= g_anon[i].addr + g_anon[i].len;
+    int i = anon_first_after(addr);                          /* the only mapping addr can be in */
+    bool in = i < g_nanon && addr >= g_anon[i].addr && addr + len <= g_anon[i].addr + g_anon[i].len;
     pthread_mutex_unlock(&g_anon_lock);
     return in;
 }
