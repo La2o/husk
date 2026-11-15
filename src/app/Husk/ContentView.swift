@@ -187,7 +187,7 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { !incoming.waiting.isEmpty },
                                     set: { if !$0 { incoming.discard() } })) {
             IncomingChooser()
-                .huskDetents([.medium], dragIndicator: true)
+                .huskDetents([.medium, .large], dragIndicator: true)     // three choices when it is an update of a game here
         }
         // APKs meant for Android wait until it can take them.
         .onChange(of: host.isReady) { ready in

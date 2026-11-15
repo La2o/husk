@@ -244,6 +244,7 @@ struct GamePage: View {
                 }
 
                 OnlineSavesSection(app: app)
+                GameUpdateSection(app: app)
             }
 
             Section("About") {
