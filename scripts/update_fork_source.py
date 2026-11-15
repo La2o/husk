@@ -5,12 +5,12 @@ Every release the IPA workflow (.github/workflows/husk-ipa.yml) publishes is tag
 Husk.ipa. The source lists them newest first, so Feather, AltStore and SideStore offer the latest and keep the older ones a
 tap away. It is written from the Releases API after each upload rather than from the workflow's artifacts, whose links expire.
 
-Two sources are made from the same releases:
-- the public one (source.json, the address people are given): every regular build, newest first. A build from
-  FIRST_WORKING_RUN on is described by its "What's new" -- the plain lines the release notes start with (the workflow
-  collects them from "Changelog:" lines in the commits). An older one says that it does not work, and why. Test builds of
-  other branches (prereleases) are left out, so the build a store offers as the latest is always a regular one;
-- with --all, the test channel (test-source.json): those too, each with the full release notes.
+Two sources are made from the same releases, and both list every build, newest first:
+- the public one (source.json, the address people are given). A regular build from FIRST_WORKING_RUN on is described by its
+  "What's new" -- the plain lines the release notes start with (the workflow collects them from "Changelog:" lines in the
+  commits). An older one says that it does not work, and why. A test build of another branch (a prerelease) says first that
+  it is one, and which regular build to go back to;
+- with --all, the test channel (test-source.json): the same builds, each with the full release notes.
 """
 import json
 import re
@@ -28,12 +28,12 @@ DESCRIPTION = (
     "Idling to Rule the Gods needs: Google Play Games sign-in with your own Google account, so its online save is the same "
     "as on your other devices; fixes for Unity 6 games; and Play without JIT for them, so they start offline.\n\n"
     "Sign in to Husk's Store with the Google account you play with, then download the game from Husk's Store. "
+    "Every build is listed: a test build says so in its description, and names the regular build to go back to. "
     "Guide and problem reports: github.com/La2o/husk"
 )
 TEST_DESCRIPTION = (
-    "The test channel of github.com/La2o/husk: every build of every branch, each with its branch, its commit and the changes "
-    "since the build before. Test builds of other branches say so. For regular use, add "
-    "https://github.com/La2o/husk/releases/download/feed/source.json instead."
+    "The test channel of github.com/La2o/husk: every build, each with its branch, its commit and the changes since the build "
+    "before. https://github.com/La2o/husk/releases/download/feed/source.json lists the same builds with a short What's new."
 )
 # 3.4.10: the first build that plays Idling to Rule the Gods with and without JIT. The builds before it are listed too, and
 # say what is wrong with them.
@@ -63,6 +63,14 @@ def not_working(run: int) -> str:
     return "" if run >= FIRST_WORKING_RUN else NOT_WORKING.get(run, NOT_WORKING_EARLY)
 
 
+def test_build_note(name: str, regular: str) -> str:
+    """What a test build says first: that it is one, of which branch, and the regular build to go back to."""
+    m = re.search(r"\(([^()]+)\)\s*$", name or "")
+    branch = f" of the branch {m.group(1)}" if m else ""
+    back = f" If something is wrong in it, install {regular}, the newest regular build, again." if regular else ""
+    return f"Test build{branch}: new, and not yet tried on a phone.{back}"
+
+
 def whats_new(body: str, run: int) -> str:
     """The public description of a build: its What's new lines, and where to report a problem."""
     lines = list(WHATS_NEW_INSTEAD.get(run, []))
@@ -77,6 +85,10 @@ def whats_new(body: str, run: int) -> str:
 
 def generate(releases: list, source_url: str, base_build: str = "", everything: bool = False) -> dict:
     versions, seen = [], set()
+    # the newest regular build: what a test build names as the one to go back to
+    regular = max(((int(m.group(2)), f"{m.group(1)}.{m.group(2)}") for r in releases
+                   if not r.get("draft") and not r.get("prerelease") and (m := TAG.fullmatch(r.get("tag_name", "")))),
+                  default=(0, ""))[1]
     for r in releases:
         m = TAG.fullmatch(r.get("tag_name", ""))
         if not m or r.get("draft"):
@@ -84,8 +96,6 @@ def generate(releases: list, source_url: str, base_build: str = "", everything: 
         base, run = m.group(1), int(m.group(2))
         if run in seen:
             continue
-        if not everything and r.get("prerelease"):
-            continue                                   # a test build of another branch: the test channel has it
         assets = [a for a in r.get("assets", [])
                   if a.get("name") == IPA and a.get("size", 0) > 0 and a.get("state", "uploaded") == "uploaded"]
         if len(assets) != 1:
@@ -93,10 +103,11 @@ def generate(releases: list, source_url: str, base_build: str = "", everything: 
         seen.add(run)
         date = r.get("published_at") or r.get("created_at") or datetime.now(timezone.utc).isoformat()
         body, broken = (r.get("body") or "").strip(), not_working(run)
+        test = test_build_note(r.get("name") or "", regular) if r.get("prerelease") else ""
         if everything:
-            description = f"{broken}\n\n{body}" if broken else body
+            description = "\n\n".join(part for part in (broken, test, body) if part)
         else:
-            description = broken or whats_new(body, run)
+            description = broken or "\n\n".join(part for part in (test, whats_new(body, run)) if part)
         versions.append({
             "version": f"{base}.{run}",
             "buildVersion": f"{base_build}.{run}" if base_build else str(run),
