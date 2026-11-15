@@ -84,6 +84,10 @@ static void (*a_glTexParameteri)(unsigned, unsigned, int);
 static void (*a_glTexImage2D)(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
 static void (*a_glCopyTexSubImage2D)(unsigned, int, int, int, int, int, int, int);
 static void (*a_glFinish)(void);
+static void (*a_glFlush)(void);
+static void *(*a_glFenceSync)(unsigned, unsigned);
+static unsigned (*a_glClientWaitSync)(void *, unsigned, uint64_t);
+static void (*a_glDeleteSync)(void *);
 static unsigned (*a_glGetError)(void);
 
 /* Unity's EGL surface may share texture objects with the Java renderer's
@@ -152,6 +156,10 @@ bool tl_egl_init(const char *egl_path, const char *gles_path, const char *frame_
     a_glTexImage2D = a_eglGetProcAddress("glTexImage2D");
     a_glCopyTexSubImage2D = a_eglGetProcAddress("glCopyTexSubImage2D");
     a_glFinish = a_eglGetProcAddress("glFinish");
+    a_glFlush = a_eglGetProcAddress("glFlush");
+    a_glFenceSync = a_eglGetProcAddress("glFenceSync");
+    a_glClientWaitSync = a_eglGetProcAddress("glClientWaitSync");
+    a_glDeleteSync = a_eglGetProcAddress("glDeleteSync");
     a_glGetError = a_eglGetProcAddress("glGetError");
     if (frame_dir) { snprintf(E.frame_dir, sizeof(E.frame_dir), "%s", frame_dir); E.latest_only = frame_every < 0; E.frame_every = frame_every != 0 ? (frame_every < 0 ? -frame_every : frame_every) : 60; }
     E.ready = true;
@@ -386,8 +394,18 @@ static const uint8_t *read_back(EGLDisplay d, EGLSurface s, EGLint *pw, EGLint *
  * GPU texture and publish that texture to the compositor. No CPU readback.
  *
  * Double buffering keeps the draw thread away from the texture most recently
- * handed to the UI thread. glFinish ensures copy completion before publish.
- * Unsupported contexts and any GL copy errors use the original path.
+ * handed to the UI thread. Unsupported contexts and any GL copy errors use
+ * the original path.
+ *
+ * The copy is not waited for. glFinish after it held the game's thread until
+ * the GPU had drawn the whole frame, every frame, so the game could not start
+ * on the next one meanwhile. The copy is flushed instead, with a fence behind
+ * it, and the fence is waited for at the next swap: the game is held only
+ * when the GPU is more than a frame behind, which also keeps frames from
+ * queueing up. The compositor may draw the texture before the copy is done;
+ * the two contexts' commands go to one Metal queue in the order they were
+ * flushed, so its draw comes after the copy. TL_GPU_HANDOFF_FINISH=1 waits
+ * with glFinish as before; so does a context without sync objects.
  */
 static bool gpu_comp_copy(EGLDisplay d, EGLSurface s)
 {
@@ -405,13 +423,35 @@ static bool gpu_comp_copy(EGLDisplay d, EGLSurface s)
         unsigned tex[2];
         int width[2], height[2], next;
         bool disabled;
+        void *fence;                /* behind the last copy; waited for at the next swap */
+        bool finish;                /* a fence could not be made or waited for: glFinish, as before */
     } cache;
+    static int finish_always = -1;
+    if (finish_always < 0) {
+        const char *e = getenv("TL_GPU_HANDOFF_FINISH");
+        finish_always = (e && e[0] == '1') || !a_glFlush || !a_glFenceSync || !a_glClientWaitSync || !a_glDeleteSync;
+    }
     if (cache.surface != s) {
+        if (cache.fence) a_glDeleteSync(cache.fence);
         if (cache.tex[0] || cache.tex[1]) a_glDeleteTextures(2, cache.tex);
         memset(&cache, 0, sizeof(cache));
         cache.surface = s;
     }
     if (cache.disabled) return false;
+
+    /* The last frame's copy, before this frame's is queued behind it (at most a tenth of a second: a frame is shown late
+     * rather than the game held). This also sends the GPU the frame the game has just drawn. */
+    if (cache.fence) {
+        unsigned waited = a_glClientWaitSync(cache.fence, 0x1 /* GL_SYNC_FLUSH_COMMANDS_BIT */, 100000000ull);
+        a_glDeleteSync(cache.fence);
+        cache.fence = NULL;
+        if (waited == 0x911D /* GL_WAIT_FAILED */) {
+            for (int i = 0; i < 16 && a_glGetError(); i++) { }
+            cache.finish = true;
+            tl_log_line("egl: the GPU compositor copy's fence could not be waited for; waiting with glFinish instead");
+        }
+    }
+    bool finish = finish_always || cache.finish;
 
     /* An error the game's own drawing left (GL_INVALID_ENUM from a query ANGLE does not know, say) would read as this copy's:
      * taken first, so only the copy's own errors count. */
@@ -439,12 +479,22 @@ static bool gpu_comp_copy(EGLDisplay d, EGLSurface s)
         cache.height[idx] = h;
     }
     a_glCopyTexSubImage2D(0x0DE1, 0, 0, 0, 0, 0, w, h);
-    a_glFinish();
-    unsigned err = a_glGetError();
+    unsigned err = a_glGetError();                                   /* the copy's own */
+    if (!err && !finish) {
+        cache.fence = a_glFenceSync(0x9117 /* GL_SYNC_GPU_COMMANDS_COMPLETE */, 0);
+        if (!cache.fence) {
+            for (int i = 0; i < 16 && a_glGetError(); i++) { }
+            cache.finish = true;
+            tl_log_line("egl: no fence for the GPU compositor copy; waiting with glFinish instead");
+        }
+    }
+    if (cache.fence) a_glFlush(); else a_glFinish();
+    if (!err) err = a_glGetError();                                  /* and what sending it found */
     a_glBindTexture(0x0DE1, (unsigned)prev_tex);
     a_glActiveTexture((unsigned)prev_active);
     a_glBindFramebuffer(0x8CA8, (unsigned)prev_read_fb);
     if (err) {
+        if (cache.fence) { a_glDeleteSync(cache.fence); cache.fence = NULL; }
         cache.disabled = true;
         tl_log_line("egl: GPU compositor copy failed with GL error %#x; falling back to CPU readback", err);
         return false;
@@ -452,7 +502,8 @@ static bool gpu_comp_copy(EGLDisplay d, EGLSurface s)
     tl_javaapp_app_texture(cache.tex[idx], w, h);
     static atomic_bool announced;
     if (!atomic_exchange(&announced, true))
-        tl_log_line("egl: Unity GPU-shared compositor active (%dx%d), bypassing per-frame glReadPixels", w, h);
+        tl_log_line("egl: Unity GPU-shared compositor active (%dx%d), bypassing per-frame glReadPixels (%s)", w, h,
+                    cache.fence ? "copy flushed, waited for at the next swap" : "glFinish after each copy");
     return true;
 }
 
