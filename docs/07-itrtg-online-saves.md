@@ -11,7 +11,9 @@ This fork is Husk 3.4 (Leviidev/Husk, build 149) with two changes on top, made s
    use: crashes at start in the loading threads, and later in a job worker. A Unity whose engine has mimalloc is now started
    with `-systemallocator`, so its memory comes from the system's malloc (`TL_UNITY_SYSTEM_ALLOCATOR=0` keeps Unity's own
    allocators). Unity reads boot.config straight out of the APK, so the setting there could not be changed on the way.
-   ITRTG also hands each frame to the screen on the GPU instead of copying it through the CPU.
+   ITRTG also hands each frame to the screen on the GPU instead of copying it through the CPU. Since 3.4.12 the game is
+   not held after each frame until the GPU has drawn it: the copy is waited for at the next frame (`TL_GPU_HANDOFF_FINISH=1`
+   waits as before), and the table of the game's memory mappings is searched by halving, not read from the start.
 3. **Playing without JIT** (Settings › Play without JIT, with the certificate Husk is signed with). Husk turns the game's
    libraries into signed dylibs, so the game needs no JIT and no Wi-Fi to start. Unity 6 died a moment after it started
    ("CODESIGNING Invalid Page" in iOS's crash report): Husk sent the code's reads of read-only data (Unity's relative C++
@@ -56,7 +58,8 @@ your games. Back up your saves first anyway (the game's page › Back Up Saves).
 
 1. In Husk, sign in to the **Store** tab with **Sign In with Google**, using the account you play ITRTG with on Android.
    The guest (Aurora) account has no Play Games player, so it cannot be used.
-   If you press Play on ITRTG with no Google account in Husk, Husk asks once whether to sign in first.
+   If you press Play on ITRTG with no Google account in Husk, Husk asks once whether to sign in first. Since 3.4.12 it asks
+   for any game that declares Play Games in its manifest, and not again for such a game after "Play Without Signing In".
 2. Open ITRTG's page in the Library. Under **Online Saves**, press **Check Play Games Sign-In**. It should show your Play
    Games player and its ID, which is the same ID the game uses on Android.
 3. Play. The game signs in by itself at start, just as it does on Android.
