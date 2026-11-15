@@ -22,6 +22,9 @@ keeps on its own server under the player's Play Games ID. What changed:
    - On the Java runtime, Unity 6 hands each frame to the screen on the GPU (a shared texture) instead of reading it back
      through the CPU on every swap. **Game Settings › Frame Handoff** sets this per game, and **CPU Copy** keeps the old
      path.
+     The copy is flushed with a fence behind it and waited for at the next swap, not with `glFinish` after each one, so
+     the game can work on the next frame while the GPU draws this one. `TL_GPU_HANDOFF_FINISH=1` waits with `glFinish` as
+     before. (Not yet tried on a device.)
 3. **Play without JIT.** With Settings › Play without JIT, Unity 6 died half a second after it started: iOS's report said
    `CODESIGNING Invalid Page`, on Unity Main Thread, at a `blr` into libunity's copy range (the image size plus a function's
    offset). A dylib copies every non-executable page after the image, read-only ones too, and the rewritten code named the
