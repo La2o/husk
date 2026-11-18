@@ -62,6 +62,14 @@ enum JITLess {
 
     static func prepare(apks: [String], progress: @escaping @Sendable (String) -> Void) async throws {
         guard enabled, let cred = SigningCertificate.credentials() else { return }
+        // An expired certificate signs libraries iOS will not load: say so now rather than after converting them.
+        let expires = await MainActor.run { SigningCertificate.shared.info?.expires }
+        if let expires, expires < Date() {
+            HuskLog.log("sign", "JIT-less: the imported certificate expired on \(expires)")
+            throw PrepareError.failed("The certificate imported for Play without JIT expired on "
+                + "\(expires.formatted(date: .abbreviated, time: .omitted)). Refresh Husk in SideStore or AltStore (or get a new "
+                + "certificate from your signing service), then import its certificate again in Settings › Play without JIT.")
+        }
         let apks = apks + runtimeLibraries
         // The certificates above the developer certificate, for iOS to trust the signatures: from Husk's own signature, which the
         // store made with the same certificate and its whole chain (a store's .p12 holds the developer certificate alone).
@@ -103,7 +111,52 @@ enum JITLess {
                 throw PrepareError.failed(why)
             }
             HuskLog.log("tl", "JIT-less: \(n) libraries ready in \(String(format: "%.1f", Date().timeIntervalSince(started))) s")
+            try JITLess.testSigned(tag: tag, dir: dir)
         }.value
+    }
+
+    /// Tags whose signed libraries were tested in this run (testSigned), so the test is not repeated on every Play.
+    private static var testedTags = Set<String>()
+    private static let testLock = NSLock()
+
+    /// Whether iOS accepts what was signed with the certificate: one library signed under `tag` dlopen()ed, the smallest, preferring
+    /// one every game loads anyway. The dylibs hold no initializers (Husk runs the ELF constructors itself), so dlopen only maps and
+    /// validates it. It is never dlclose()d: the loader dlopen()s the same path later and gets the same handle, and dyld cannot be
+    /// asked to forget it safely (husk-tl-ld.c aot_import). Throws when iOS refuses the signature, after making the libraries
+    /// signed under `tag` be signed again next time; any other failure is only logged, for the loader to report.
+    private static func testSigned(tag: String, dir: String) throws {
+        testLock.lock()
+        defer { testLock.unlock() }
+        if testedTags.contains(tag) { return }
+        let fm = FileManager.default
+        let names = (try? fm.contentsOfDirectory(atPath: dir)) ?? []
+        func signer(_ name: String) -> String? { try? String(contentsOfFile: dir + "/" + name, encoding: .utf8) }
+        func size(_ name: String) -> Int64 { (try? fm.attributesOfItem(atPath: dir + "/" + name)[.size] as? Int64) ?? Int64.max }
+        let signed = names.filter { $0.hasSuffix(".dylib") && signer($0 + ".signer") == tag }
+        let preferred = signed.filter { $0.contains("libnativehelper") || $0.contains("libandroidio") }
+        guard let pick = (preferred.isEmpty ? signed : preferred).min(by: { size($0) < size($1) }) else { return }
+        if dlopen(dir + "/" + pick, RTLD_NOW | RTLD_LOCAL) != nil {
+            testedTags.insert(tag)
+            HuskLog.log("tl", "JIT-less: iOS accepts the signed libraries (\(pick))")
+            return
+        }
+        var why = "no reason given"
+        if let e = dlerror() { why = String(cString: e) }
+        guard why.contains("code signature") else {
+            testedTags.insert(tag)
+            HuskLog.log("tl", "JIT-less: test load of \(pick) failed: \(why)")
+            return
+        }
+        HuskLog.log("tl", "JIT-less: iOS refused a signed library: \(why)")
+        // The libraries stay; without their .signer files they are signed again on the next start.
+        for name in names where name.hasSuffix(".signer") && signer(name) == tag {
+            try? fm.removeItem(atPath: dir + "/" + name)
+        }
+        throw PrepareError.failed("iOS refused the libraries Husk signed with your certificate, so the game cannot start without JIT. "
+            + "Usually the certificate imported in Settings › Play without JIT has been revoked or replaced: SideStore and AltStore "
+            + "make a new one when they refresh, and signing in with the same Apple ID elsewhere (another phone, Sideloadly, Xcode) "
+            + "can revoke it. Import the certificate that installed Husk again, then start the game. Or turn off Play without JIT "
+            + "and use JIT.")
     }
 
     /// Before a game starts: no executable memory is made in this run (even when JIT is on, so the test is real), and libraries

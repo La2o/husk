@@ -627,6 +627,9 @@ struct JITLessSettings: View {
                 if let why = certificate.lastError {
                     Text(why).font(.caption).foregroundStyle(.orange)
                 }
+                if let warning = certificate.warning {
+                    Text(warning).font(.caption).foregroundStyle(.orange)
+                }
             } header: {
                 Text("Certificate")
             }

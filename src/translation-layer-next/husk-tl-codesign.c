@@ -57,6 +57,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <time.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <arpa/inet.h>
 #include <TargetConditionals.h>
@@ -1015,6 +1016,37 @@ bool husk_p12_info(const uint8_t *p12, size_t p12_len, const char *password,
 
 /* ------------------------------------------------------------------ Mach-O Dylib Codesigner */
 
+/* A certificate's CN for the log, which people share in bug reports: a free Apple ID's CN holds the person's email address, so
+ * only the certificate type and the 10-character ID in parentheses are kept. "iPhone Developer: jane@example.com (AB12CD34EF)"
+ * is "iPhone Developer: … (AB12CD34EF)"; a CN in any other shape is "…". The CN in the signature itself is left alone. */
+static void cn_for_log(const char *cn, char *out, size_t outlen)
+{
+    static const char ellipsis[] = "\xe2\x80\xa6"; /* U+2026 in UTF-8 */
+    const char *colon = cn ? strstr(cn, ": ") : NULL;
+    size_t n = cn ? strlen(cn) : 0;
+    const char *paren = (n >= 12 && cn[n - 1] == ')') ? cn + n - 12 : NULL;   /* "(" + 10 characters + ")" */
+    if (colon && paren && paren[0] == '(' && paren > colon + 1)
+        snprintf(out, outlen, "%.*s: %s %s", (int)(colon - cn), cn, ellipsis, paren);
+    else
+        snprintf(out, outlen, "%s", ellipsis);
+}
+
+/* The signing identity, logged once rather than once per library: again only when it (or the chain carried with it) changes. */
+static pthread_mutex_t g_identity_log_lock = PTHREAD_MUTEX_INITIALIZER;
+static char g_identity_logged[512];
+
+static void log_identity(const cert_meta *meta)
+{
+    char cn[300], line[512];
+    cn_for_log(meta->common_name, cn, sizeof(cn));
+    snprintf(line, sizeof(line), "sign: identity CN='%s' team='%s' rsa=%d chain=%d", cn, meta->team_id, (int)meta->is_rsa, g_nchain);
+    pthread_mutex_lock(&g_identity_log_lock);
+    bool fresh = strcmp(line, g_identity_logged) != 0;
+    if (fresh) snprintf(g_identity_logged, sizeof(g_identity_logged), "%s", line);
+    pthread_mutex_unlock(&g_identity_log_lock);
+    if (fresh) tl_log_line("%s", line);
+}
+
 bool husk_codesign_dylib(const char *path, const uint8_t *p12, size_t p12_len, const char *password,
                          const char *ident, char *err, size_t errlen)
 {
@@ -1086,8 +1118,7 @@ bool husk_codesign_dylib(const char *path, const uint8_t *p12, size_t p12_len, c
             return false;
         }
         ensure_wwdr_in_chain();
-        tl_log_line("sign: identity CN='%s' team='%s' rsa=%d chain=%d",
-                    meta.common_name, meta.team_id, (int)meta.is_rsa, g_nchain);
+        log_identity(&meta);
     }
 
     /* Read Mach-O dylib */
@@ -1625,10 +1656,15 @@ static bool der_next(const uint8_t *p, const uint8_t *end, uint8_t *tag, const u
 /* The end of the element whose contents are v..v+n (an indefinite one also has its 00 00 marker) */
 static const uint8_t *der_after(const uint8_t *elem, const uint8_t *v, size_t n) { return v + n + (elem[1] == 0x80 ? 2 : 0); }
 
-int husk_codesign_chain_from_executable(const char *path)
+/* Hands every certificate in the code signature of the executable at `path` (LC_CODE_SIGNATURE -> SuperBlob slot 0x10000 ->
+ * CMS BlobWrapper -> SignedData [0] certificates) to `fn`, whole (its DER), while the signature is in memory. Returns how many
+ * there were, or -1 when the file does not open. */
+typedef void (*exe_cert_fn)(const uint8_t *der, size_t len, void *ctx);
+
+static int exe_signature_certs(const char *path, exe_cert_fn fn, void *ctx)
 {
-    FILE *f = fopen(path, "rb");
-    if (!f) return 0;
+    FILE *f = path ? fopen(path, "rb") : NULL;
+    if (!f) return -1;
     uint8_t hdr[32];
     int found = 0;
     uint32_t dataoff = 0, datasize = 0;
@@ -1668,7 +1704,7 @@ int husk_codesign_chain_from_executable(const char *path)
                     const uint8_t *cv; size_t cn;
                     if (!der_next(c, ce, &tag, &cv, &cn)) break;
                     size_t whole = (size_t)(der_after(c, cv, cn) - c);
-                    if (tag == 0x30 && chain_add(c, whole)) found++;
+                    if (tag == 0x30) { fn(c, whole, ctx); found++; }
                     c = der_after(c, cv, cn);
                 }
                 break;
@@ -1677,6 +1713,75 @@ int husk_codesign_chain_from_executable(const char *path)
     }
     free(sig);
     fclose(f);
+    return found;
+}
+
+static void chain_add_counted(const uint8_t *der, size_t len, void *ctx)
+{
+    if (chain_add(der, len)) (*(int *)ctx)++;
+}
+
+int husk_codesign_chain_from_executable(const char *path)
+{
+    int found = 0;
+    if (exe_signature_certs(path, chain_add_counted, &found) < 0) return 0;
     ensure_wwdr_in_chain();
     return found;
+}
+
+/* ------------------------------------------------------------ is this .p12 the app's own certificate? */
+
+/* The developer certificate of a .p12 (its identity's), as DER; NULL when the .p12 does not open or has none. Released by the
+ * caller. Opens the .p12 the way husk_p12_info and husk_codesign_dylib do. */
+static CFDataRef p12_copy_leaf_der(const uint8_t *p12, size_t p12_len, const char *password)
+{
+    if (!p12 || p12_len == 0) return NULL;
+    CFDataRef data = CFDataCreateWithBytesNoCopy(kCFAllocatorDefault, p12, (CFIndex)p12_len, kCFAllocatorNull);
+    if (!data) return NULL;
+#if !TARGET_OS_IPHONE
+    char kc_path[256] = {0};
+    SecKeychainRef kc = macos_create_temp_keychain(kc_path, sizeof(kc_path));
+    CFArrayRef items = NULL;
+    OSStatus st = pkcs12_open(data, password, kc, &items);
+#else
+    CFArrayRef items = NULL;
+    OSStatus st = pkcs12_open(data, password, &items);
+#endif
+    CFRelease(data);
+
+    CFDataRef der = NULL;
+    if (st == errSecSuccess && items && CFArrayGetCount(items) > 0) {
+        CFDictionaryRef dict = (CFDictionaryRef)CFArrayGetValueAtIndex(items, 0);
+        SecIdentityRef identity = (SecIdentityRef)CFDictionaryGetValue(dict, kSecImportItemIdentity);
+        SecCertificateRef cert = NULL;
+        if (identity && SecIdentityCopyCertificate(identity, &cert) == errSecSuccess && cert) {
+            der = SecCertificateCopyData(cert);
+            CFRelease(cert);
+        }
+    }
+    if (items) CFRelease(items);
+#if !TARGET_OS_IPHONE
+    macos_cleanup_temp_keychain(kc, kc_path);
+#endif
+    return der;
+}
+
+typedef struct { const uint8_t *der; size_t len; bool match; } cert_match;
+
+static void cert_match_check(const uint8_t *der, size_t len, void *ctx)
+{
+    cert_match *m = (cert_match *)ctx;
+    if (len == m->len && memcmp(der, m->der, len) == 0) m->match = true;
+}
+
+int husk_p12_signs_executable(const uint8_t *p12, size_t p12_len, const char *password, const char *exe_path)
+{
+    if (!exe_path || !exe_path[0]) return -1;
+    CFDataRef leaf = p12_copy_leaf_der(p12, p12_len, password);
+    if (!leaf) return -1;
+    cert_match m = { CFDataGetBytePtr(leaf), (size_t)CFDataGetLength(leaf), false };
+    int seen = m.len > 0 ? exe_signature_certs(exe_path, cert_match_check, &m) : -1;
+    CFRelease(leaf);
+    if (seen <= 0) return -1;        /* no signature, or no certificates in it */
+    return m.match ? 1 : 0;
 }

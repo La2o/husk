@@ -75,6 +75,21 @@ bool husk_codesign_dylib(const char *path, const uint8_t *p12, size_t p12_len, c
  */
 int husk_codesign_chain_from_executable(const char *path);
 
+/*
+ * Whether the .p12's developer certificate is among the certificates in the code signature of the executable at `path` (the
+ * app: its installer signed it with one certificate). Compares the certificates' DER bytes. Does not change the chain that
+ * husk_codesign_chain_from_executable keeps.
+ *
+ * Parameters:
+ *   p12              - Pointer to .p12 bundle file contents in memory.
+ *   p12_len          - Length of p12 data in bytes.
+ *   password         - Passphrase for the .p12 bundle (opened as husk_p12_info opens it).
+ *   exe_path         - Path to the executable, e.g. the running app's own.
+ *
+ * Returns 1: it is; 0: it is not; -1: either could not be read (no signature, a .p12 that does not open).
+ */
+int husk_p12_signs_executable(const uint8_t *p12, size_t p12_len, const char *password, const char *exe_path);
+
 #ifdef __cplusplus
 }
 #endif

@@ -21,6 +21,11 @@ final class SigningCertificate: ObservableObject {
 
     @Published private(set) var info: Info?
     @Published var lastError: String?
+    /// Whether the imported certificate is the one Husk's own signature carries (the store installed Husk with it); nil when
+    /// that could not be told, or nothing was imported in this run.
+    @Published private(set) var signsHusk: Bool?
+    /// Shown in Settings beside lastError; the import still succeeded.
+    @Published private(set) var warning: String?
 
     private static let service = "com.husk.signing"
     private static let callbackScheme = "husk"
@@ -58,6 +63,20 @@ final class SigningCertificate: ObservableObject {
         info = opened.info
         lastError = nil
         HuskLog.log("sign", "certificate imported: team \(opened.info.teamID), expires \(opened.info.expires)")
+        // Same team is not enough: a free Apple ID's certificate is replaced when the store refreshes, and iOS refuses what an
+        // older or other one of the team's certificates signs once it is revoked.
+        let signs = Self.certificateSignsHusk(data, opened.password)
+        signsHusk = signs
+        if signs == false {
+            warning = "This is not the certificate Husk was installed with, though it is the same team. If games do not start "
+                    + "without JIT, import the certificate that installed Husk: in SideStore or AltStore, or the .p12 your signing "
+                    + "service gave you."
+            HuskLog.log("sign", "the imported certificate is not the one in Husk's own signature (same team)")
+        } else {
+            warning = nil
+            HuskLog.log("sign", signs == true ? "the imported certificate is the one in Husk's own signature"
+                                              : "could not tell whether the imported certificate is the one in Husk's own signature")
+        }
     }
 
     /// Ask SideStore or AltStore for the certificate it signs Husk with; it answers by opening husk://certificate?cert=…&password=…
@@ -99,6 +118,8 @@ final class SigningCertificate: ObservableObject {
             SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: Self.service, kSecAttrAccount: account] as CFDictionary)
         }
         info = nil
+        signsHusk = nil
+        warning = nil
         HuskLog.log("sign", "certificate removed")
     }
 
@@ -175,6 +196,15 @@ final class SigningCertificate: ObservableObject {
         }
         HuskLog.log("sign", "certificate not usable: \(lastError)")
         return nil
+    }
+
+    /// Whether the .p12's certificate is among those in Husk's own code signature: nil when either could not be read.
+    private nonisolated static func certificateSignsHusk(_ p12: Data, _ password: String) -> Bool? {
+        guard let exe = Bundle.main.executablePath else { return nil }
+        let r = p12.withUnsafeBytes { b in
+            husk_p12_signs_executable(b.bindMemory(to: UInt8.self).baseAddress, b.count, password, exe)
+        }
+        return r < 0 ? nil : r == 1
     }
 
     private nonisolated static func tag(_ p12: Data) -> String {
