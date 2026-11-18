@@ -10,7 +10,7 @@ import SwiftUI
 struct AppDiagnosis: Identifiable, Equatable {
     enum Kind: String {
         case badAPK, unsupportedCPU, missingSplits, protected, needsGoogle, missingFeature, javaCrash, nativeCrash, closedItself,
-             missingFunction, noProgress, noJIT, outOfAddressSpace
+             missingFunction, noProgress, noJIT, outOfAddressSpace, signatureRefused
     }
     let id = UUID()
     let kind: Kind
@@ -35,6 +35,7 @@ struct AppDiagnosis: Identifiable, Equatable {
         case .noProgress: return "hourglass"
         case .noJIT: return "bolt.slash"
         case .outOfAddressSpace: return "memorychip"
+        case .signatureRefused: return "lock.trianglebadge.exclamationmark"
         }
     }
 
@@ -81,6 +82,26 @@ struct AppDiagnosis: Identifiable, Equatable {
     /// The reason a run stopped, from its log; nil when nothing in it explains the end (the app closed the normal way).
     static func fromLog(_ text: String) -> AppDiagnosis? {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+
+        // Play without JIT: iOS refused the libraries Husk signed on the phone. Checked first of all, as the root cause: what follows
+        // it in the log (needs N MiB of executable memory, a library that did not load, java.lang.System failing to initialise, an
+        // unresolved import) only follows from the libraries not loading, and would otherwise be taken for a missing feature of Husk
+        if let l = lines.first(where: { $0.contains("its dylib does not load") && $0.contains("code signature invalid") }) {
+            return AppDiagnosis(kind: .signatureRefused, title: "Play without JIT: iOS refused the signed libraries",
+                                detail: "iOS would not load the game's libraries that Husk signed with the certificate imported for Play without "
+                                    + "JIT, so the game could not start. Usually that certificate has been revoked or replaced: SideStore and "
+                                    + "AltStore make a new one when they refresh, and signing in with the same Apple ID elsewhere (another phone, "
+                                    + "Sideloadly, Xcode) can revoke it. Import the certificate that installed Husk again in Settings › Play "
+                                    + "without JIT, or turn Play without JIT off and use JIT.",
+                                evidence: signatureEvidence(l))
+        }
+        if !lines.contains(where: { $0.contains("code signature invalid") }),
+           let l = lines.first(where: { $0.contains("its dylib does not load") }) {
+            return AppDiagnosis(kind: .signatureRefused, title: "Play without JIT: a library did not load",
+                                detail: "iOS would not load one of the game's libraries that Husk prepared for Play without JIT, so the game could "
+                                    + "not start. Try turning Play without JIT off and using JIT, and send the log.",
+                                evidence: String(l.prefix(300)))
+        }
 
         // No executable memory: on iOS with TXM only a debugger can grant it, and without it the loader cannot load Android's own
         // libraries, so everything after (java.lang.System failing to initialise, missing natives) follows from this
@@ -229,6 +250,13 @@ struct AppDiagnosis: Identifiable, Equatable {
                                 detail: "The app called \(fn), a system function Husk does not provide yet.", evidence: l)
         }
         return nil
+    }
+
+    /// A dlopen refusal line cut after "code signature invalid" and the text up to the next ")", at most 300 characters.
+    private static func signatureEvidence(_ line: String) -> String {
+        guard let r = line.range(of: "code signature invalid") else { return String(line.prefix(300)) }
+        let end = line[r.upperBound...].prefix(200).firstIndex(of: ")").map { line.index(after: $0) } ?? r.upperBound
+        return String(line[..<end].prefix(300))
     }
 
     private static func googleDiagnosis(_ line: String) -> AppDiagnosis {
